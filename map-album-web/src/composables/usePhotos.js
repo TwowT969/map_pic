@@ -70,7 +70,9 @@ export function usePhotos() {
   function photoUrl(url) {
     if (!url) return ''
     if (url.startsWith('http')) return url
-    return url  // Vite proxy 处理 /api 和 /uploads
+    // 后端 context-path=/api，资源映射 /uploads/** 实际服务于 /api/uploads/**
+    // 加 /api 前缀走 Vite proxy -> http://localhost:48081/api/uploads/...
+    return '/api' + url
   }
 
   return {

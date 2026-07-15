@@ -11,6 +11,7 @@
               <option name="cwd" value="C:\coderepository\map_pic" />
               <option name="model" value="claude-opus-4-8[1m]" />
               <option name="permissionMode" value="bypassPermissions" />
+              <option name="reasoningEffort" value="medium" />
             </TabSessionState>
           </value>
         </entry>

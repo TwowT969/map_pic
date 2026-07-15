@@ -85,18 +85,25 @@ document.addEventListener('click', (e) => {
 .search-bar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 100;
   padding: 10px 16px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.92) 100%);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  /* 外层透明，不遮挡地图 */
+  background: transparent;
+  pointer-events: none; /* 让空白处点击穿透到地图 */
 }
-.inner { max-width: 600px; margin: 0 auto; position: relative; }
+.inner { max-width: 600px; margin: 0 auto; position: relative; pointer-events: auto; }
 .search-bar input {
   width: 100%; height: 42px; padding: 0 44px 0 16px;
-  border: 1.5px solid #e0e0e0; border-radius: 21px;
-  font-size: 15px; outline: none; background: #f8f8f8;
+  border: 1.5px solid rgba(255,255,255,0.6); border-radius: 21px;
+  font-size: 15px; outline: none;
+  background: rgba(255,255,255,0.75);
+  backdrop-filter: blur(8px);
   transition: all 0.2s;
+  color: #333;
 }
-.search-bar input:focus { border-color: #4a90d9; background: #fff; box-shadow: 0 2px 8px rgba(74,144,217,0.15); }
+.search-bar input::placeholder { color: #888; }
+.search-bar input:focus {
+  border-color: #4a90d9; background: rgba(255,255,255,0.95);
+  box-shadow: 0 2px 12px rgba(74,144,217,0.25);
+}
 .search-icon {
   position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
   width: 32px; height: 32px; border-radius: 50%; background: #4a90d9;
@@ -111,6 +118,7 @@ document.addEventListener('click', (e) => {
   background: #fff; border-radius: 12px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.12);
   max-height: 320px; overflow-y: auto; display: none; z-index: 101;
+  pointer-events: auto; /* 外层穿透，下拉需可点 */
 }
 .suggest-dropdown.show { display: block; }
 .suggest-item {

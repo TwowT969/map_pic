@@ -1,65 +1,62 @@
 <template>
-  <Transition name="panel">
-    <div v-if="visible" class="side-panel" :class="{ open: visible }">
-      <div class="panel-header">
-        <h3>{{ title }}</h3>
-        <button class="close-btn" @click="$emit('close')">✕</button>
-      </div>
-      <div class="panel-body">
-        <!-- 创建模式 -->
+  <div class="side-panel" :class="{ open: show }">
+    <div class="panel-header">
+      <h3>{{ title }}</h3>
+      <button class="close-btn" @click="handleClose">✕</button>
+    </div>
+    <div class="panel-body">
+      <!-- 创建模式 -->
+      <SpotEditForm
+        v-if="isCreating"
+        :initial="createFormData"
+        mode="create"
+        @submit="onCreate"
+        @cancel="handleClose"
+      />
+
+      <!-- 详情 + 编辑模式 -->
+      <template v-else-if="spot">
+        <SpotInfo v-if="!editing" :spot="spot" @edit="editing = true" />
         <SpotEditForm
-          v-if="isCreating"
-          :initial="createFormData"
-          mode="create"
-          @submit="onCreate"
-          @cancel="$emit('close')"
+          v-else
+          :initial="editFormData"
+          mode="edit"
+          @submit="onUpdate"
+          @cancel="editing = false"
         />
 
-        <!-- 详情 + 编辑模式 -->
-        <template v-else-if="spot">
-          <SpotInfo v-if="!editing" :spot="spot" @edit="editing = true" />
-          <SpotEditForm
-            v-else
-            :initial="editFormData"
-            mode="edit"
-            @submit="onUpdate"
-            @cancel="editing = false"
-          />
+        <!-- 删除按钮（非编辑态） -->
+        <div v-if="!editing" style="display:flex;gap:8px;margin:12px 0;">
+          <button class="btn btn-danger btn-sm" @click="onDelete">🗑 删除点位</button>
+        </div>
 
-          <!-- 删除按钮（非编辑态） -->
-          <div v-if="!editing" style="display:flex;gap:8px;margin:12px 0;">
-            <button class="btn btn-danger btn-sm" @click="onDelete">🗑 删除点位</button>
-          </div>
-
-          <!-- 照片区域 -->
-          <div class="section-title">🖼️ 照片列表 <span class="count">{{ photos.length }} 张</span></div>
-          <PhotoUploader v-if="!editing" :spot-id="spot.id" @upload="onUpload" />
-          <PhotoGrid
-            v-if="!editing && photos.length > 0"
-            :photos="photos"
-            @delete="onDeletePhoto"
-          />
-          <div v-else-if="!editing && photos.length === 0" class="empty-state">
-            <div class="icon">📷</div>
-            <p>还没有照片，上传第一张吧</p>
-          </div>
-        </template>
-      </div>
+        <!-- 照片区域 -->
+        <div class="section-title">🖼️ 照片列表 <span class="count">{{ photos.length }} 张</span></div>
+        <PhotoUploader v-if="!editing" :spot-id="spot.id" @upload="onUpload" />
+        <PhotoGrid
+          v-if="!editing && photos.length > 0"
+          :photos="photos"
+          @delete="onDeletePhoto"
+        />
+        <div v-else-if="!editing && photos.length === 0" class="empty-state">
+          <div class="icon">📷</div>
+          <p>还没有照片，上传第一张吧</p>
+        </div>
+      </template>
     </div>
-  </Transition>
+  </div>
   <!-- 遮罩 -->
-  <div v-if="visible" class="overlay" @click="$emit('close')"></div>
+  <div class="overlay" :class="{ show: show }" @click="handleClose"></div>
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import SpotInfo from './SpotInfo.vue'
 import SpotEditForm from './SpotEditForm.vue'
 import PhotoGrid from './PhotoGrid.vue'
 import PhotoUploader from './PhotoUploader.vue'
 
 const props = defineProps({
-  visible: { type: Boolean, default: false },
   spot: { type: Object, default: null },
   photos: { type: Array, default: () => [] },
   isCreating: { type: Boolean, default: false },
@@ -69,6 +66,17 @@ const props = defineProps({
 const emit = defineEmits(['close', 'created', 'updated', 'deleted', 'upload', 'deletePhoto'])
 
 const editing = ref(false)
+const show = ref(false)
+
+// 挂载后下一帧触发滑入动画
+onMounted(() => {
+  nextTick(() => { show.value = true })
+})
+
+function handleClose() {
+  show.value = false
+  emit('close')
+}
 
 // spot 或 isCreating 变化时退出编辑模式
 watch(() => [props.spot, props.isCreating], () => { editing.value = false })
@@ -172,7 +180,4 @@ function onDeletePhoto(photoId) {
 }
 .empty-state { text-align: center; padding: 30px 20px; color: #ccc; }
 .empty-state .icon { font-size: 48px; margin-bottom: 8px; }
-
-.panel-enter-active { animation: panel-in 0.35s cubic-bezier(0.4, 0, 0.2, 1); }
-@keyframes panel-in { from { right: -420px; } to { right: 0; } }
 </style>

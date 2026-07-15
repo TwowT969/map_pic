@@ -5,6 +5,10 @@
       @map-ready="onMapReady"
       @spot-click="onSpotClick"
     />
+    <!-- 浮动创建按钮 -->
+    <button class="fab-add" @click="startCreateSpot" title="添加点位">
+      <span>+</span>
+    </button>
     <SpotPanel
       v-if="panelVisible"
       :spot="currentSpot"
@@ -28,7 +32,7 @@
 </template>
 
 <script setup>
-import { ref, computed, provide } from 'vue'
+import { ref, computed, provide, onMounted, onBeforeUnmount } from 'vue'
 import SearchBar from './components/SearchBar.vue'
 import MapContainer from './components/MapContainer.vue'
 import SpotPanel from './components/SpotPanel.vue'
@@ -43,7 +47,7 @@ import { injectMarkerStyles } from './utils/marker.js'
 // 初始化
 injectMarkerStyles()
 
-const { map, initMap, getAMap } = useAmap()
+const { map, initMap, getAMap, createGeocoder } = useAmap()
 const spotsStore = useSpots()
 const photosStore = usePhotos()
 const { toastState, showToast } = useToast()
@@ -76,31 +80,49 @@ async function onMapReady(containerId) {
   try {
     const m = await initMap(containerId)
     spotsStore.bind(m, getAMap(), () => photosStore.latestPhotoMap.value)
-    m.on('click', (e) => {
+    m.on('click', async (e) => {
       if (!spotsStore.isCreating.value) return
+      // 1. 放置标记
       const coord = spotsStore.placeCreateMarker(e.lnglat)
-      createCoord.value = coord
-      // 逆地理编码
-      const geocoder = new (getAMap()).Geocoder()
-      geocoder.getAddress([coord.lng, coord.lat], (status, result) => {
-        if (status === 'complete' && result.regeocode) {
-          createCoord.value = {
-            lng: coord.lng, lat: coord.lat,
-            address: result.regeocode.formattedAddress || '',
-            province: (result.regeocode.addressComponent || {}).province || '',
-            city: (result.regeocode.addressComponent || {}).city || '',
-            district: (result.regeocode.addressComponent || {}).district || ''
+
+      // 2. 立即打开创建面板（不等 geocoder）
+      createCoord.value = { lng: coord.lng, lat: coord.lat, address: '', province: '', city: '', district: '' }
+      currentSpot.value = null
+      isCreating.value = true
+      panelVisible.value = true
+
+      // 3. 后台逆地理编码，回填地址
+      try {
+        const geocoder = await createGeocoder()
+        geocoder.getAddress([coord.lng, coord.lat], (status, result) => {
+          if (status === 'complete' && result.regeocode) {
+            createCoord.value = {
+              lng: coord.lng, lat: coord.lat,
+              address: result.regeocode.formattedAddress || '',
+              province: (result.regeocode.addressComponent || {}).province || '',
+              city: (result.regeocode.addressComponent || {}).city || '',
+              district: (result.regeocode.addressComponent || {}).district || ''
+            }
           }
-        }
-        spotsStore.isCreating.value = true
-        isCreating.value = true
-        currentSpot.value = null
-        panelVisible.value = true
-      })
+        })
+      } catch (err) {
+        console.warn('[App] 逆地理编码失败:', err)
+      }
     })
     m.on('rightclick', () => {
-      showToast('点击地图放置标记以创建点位')
+      // 先关闭当前面板（如果开着），重置所有状态
+      if (panelVisible.value) {
+        panelVisible.value = false
+      }
+      currentSpot.value = null
+      isCreating.value = false
+      spotsStore.cancelCreateMode()
+      // 再进入创建模式
       spotsStore.startCreateMode()
+      // 延迟关闭面板确保 Vue 响应式更新
+      setTimeout(() => {
+        showToast('点击地图放置标记以创建点位')
+      }, 50)
     })
 
     // 加载数据
@@ -128,6 +150,16 @@ function onSearchSelect({ lng, lat, name }) {
   showToast('已定位到: ' + name)
 }
 
+// 浮动按钮 → 进入创建模式
+function startCreateSpot() {
+  if (panelVisible.value) panelVisible.value = false
+  currentSpot.value = null
+  isCreating.value = false
+  spotsStore.cancelCreateMode()
+  spotsStore.startCreateMode()
+  showToast('点击地图放置点位标记')
+}
+
 // 点位点击 → 打开面板
 function onSpotClick(spot) {
   currentSpot.value = spot
@@ -148,10 +180,13 @@ function closePanel() {
 async function onSpotCreated(spotData) {
   try {
     const spot = await spotsStore.create({ ...spotData, userId: 2 })
+    // 清理创建模式的 marker 和状态
+    spotsStore.cancelCreateMode()
     photosStore.photosBySpot.value = { ...photosStore.photosBySpot.value, [spot.id]: [] }
     currentSpot.value = spot
     isCreating.value = false
     showToast('点位创建成功', 'success')
+    console.log('[App] 点位创建完成 id=' + spot.id + ' name=' + spot.name)
   } catch (e) {
     showToast('创建失败: ' + e.message, 'error')
   }
@@ -211,6 +246,29 @@ async function onPhotoDelete(photoId) {
     showToast('删除失败: ' + e.message, 'error')
   }
 }
+
+// Esc 退出创建模式 / 关闭面板 / 关闭灯箱
+function onKeyDown(e) {
+  if (e.key !== 'Escape') return
+  if (lightboxSrc.value) {
+    lightboxSrc.value = null
+    e.preventDefault()
+    return
+  }
+  if (panelVisible.value) {
+    closePanel()
+    e.preventDefault()
+    return
+  }
+  if (spotsStore.isCreating.value) {
+    spotsStore.cancelCreateMode()
+    showToast('已退出创建模式')
+    e.preventDefault()
+  }
+}
+
+onMounted(() => document.addEventListener('keydown', onKeyDown))
+onBeforeUnmount(() => document.removeEventListener('keydown', onKeyDown))
 </script>
 
 <style>
@@ -218,4 +276,20 @@ async function onPhotoDelete(photoId) {
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; overflow: hidden; }
 .app-root { width: 100%; height: 100%; position: relative; }
+
+.fab-add {
+  position: fixed; top: 64px; right: 20px; z-index: 150;
+  width: 48px; height: 48px; border-radius: 50%;
+  background: #4a90d9; color: #fff;
+  border: none; cursor: pointer; font-size: 26px;
+  box-shadow: 0 4px 16px rgba(74,144,217,0.4);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.2s, box-shadow 0.2s;
+  user-select: none;
+}
+.fab-add:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 20px rgba(74,144,217,0.55);
+}
+.fab-add:active { transform: scale(0.95); }
 </style>

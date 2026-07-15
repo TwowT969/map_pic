@@ -38,7 +38,8 @@ export function createMarkerElement(spot, photo) {
 function photoUrl(url) {
   if (!url) return ''
   if (url.startsWith('http')) return url
-  return url // Vite proxy handles /uploads
+  // 后端 context-path=/api，/uploads/** 实际服务于 /api/uploads/**
+  return '/api' + url
 }
 
 // 动态注入 marker 样式（一次性）

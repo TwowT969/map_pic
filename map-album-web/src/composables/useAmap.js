@@ -3,6 +3,7 @@ import { fetchAmapConfig, fetchIpLocation } from '../api/index.js'
 
 const map = shallowRef(null)
 let AMapGlobal = null
+let _geolocation = null
 
 export function useAmap() {
 
@@ -86,7 +87,49 @@ export function useAmap() {
     map.value = m
     console.log('[useAmap] 地图实例创建完成 container=', containerId,
       'size=', container.offsetWidth + 'x' + container.offsetHeight)
+
+    // 异步加载并添加地图控件（官方示例写法）
+    addControls(m)
+
     return m
+  }
+
+  /**
+   * 添加地图控件：缩放工具条 ToolBar、比例尺 Scale、定位 Geolocation。
+   * 参考官方示例：AMap.plugin(name, callback) -> new -> map.addControl
+   */
+  function addControls(m) {
+    // 1. 缩放工具条
+    AMapGlobal.plugin('AMap.ToolBar', () => {
+      const toolbar = new AMapGlobal.ToolBar({
+        position: { right: '20px', bottom: '90px' }
+      })
+      m.addControl(toolbar)
+    })
+
+    // 2. 比例尺
+    AMapGlobal.plugin('AMap.Scale', () => {
+      const scale = new AMapGlobal.Scale()
+      m.addControl(scale)
+    })
+
+    // 3. 定位控件
+    AMapGlobal.plugin('AMap.Geolocation', () => {
+      const geolocation = new AMapGlobal.Geolocation({
+        enableHighAccuracy: true,   // 高精度定位
+        timeout: 10000,             // 超时 10s
+        buttonPosition: 'RB',       // 定位按钮右下
+        buttonOffset: new AMapGlobal.Pixel(20, 140),
+        zoomToAccuracy: true,       // 定位后调整视野
+        showMarker: true,           // 显示定位点
+        showCircle: true,           // 显示定位精度圈
+        panToLocation: true         // 定位后移动到定位点
+      })
+      m.addControl(geolocation)
+      // 暴露给外部，便于主动触发 getCurrentPosition
+      _geolocation = geolocation
+    })
+    console.log('[useAmap] 地图控件已添加（ToolBar / Scale / Geolocation）')
   }
 
   async function initMap(containerId) {
@@ -107,11 +150,39 @@ export function useAmap() {
 
   function getAMap() { return AMapGlobal }
 
+  /** 加载 AMap 插件（Promise 模式，插件就绪后 resolve） */
+  function loadPlugin(name) {
+    return new Promise((resolve, reject) => {
+      if (!AMapGlobal) return reject(new Error('AMap SDK not loaded'))
+      AMapGlobal.plugin(name, () => {
+        console.log('[useAmap] 插件加载完成:', name)
+        resolve()
+      })
+    })
+  }
+
+  /** 创建 Geocoder 实例（自动加载插件） */
+  async function createGeocoder() {
+    await loadPlugin('AMap.Geocoder')
+    return new AMapGlobal.Geocoder()
+  }
+
+  /** 主动触发浏览器高精度定位（返回 Promise） */
+  function locate() {
+    return new Promise((resolve, reject) => {
+      if (!_geolocation) return reject(new Error('Geolocation 控件未就绪'))
+      _geolocation.getCurrentPosition((status, result) => {
+        if (status === 'complete') resolve(result)
+        else reject(new Error(result?.message || '定位失败'))
+      })
+    })
+  }
+
   /** 脱敏输出：只显示前后各 4 位 */
   function mask(s) {
     if (!s || s.length <= 8) return s || '(空)'
     return s.substring(0, 4) + '****' + s.substring(s.length - 4)
   }
 
-  return { map, initMap, getAMap }
+  return { map, initMap, getAMap, loadPlugin, createGeocoder, locate }
 }

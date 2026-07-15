@@ -17,7 +17,7 @@ const openLightbox = inject('openLightbox', (src) => {})
 function photoUrl(url) {
   if (!url) return ''
   if (url.startsWith('http')) return url
-  return url
+  return '/api' + url  // 后端 context-path=/api
 }
 
 function onPhotoClick(photo) {
