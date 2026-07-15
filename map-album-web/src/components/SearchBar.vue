@@ -1,0 +1,127 @@
+<template>
+  <div class="search-bar">
+    <div class="inner">
+      <input
+        type="text"
+        v-model="keyword"
+        placeholder="搜索地点…"
+        autocomplete="off"
+        @input="onInput"
+        @keydown.enter="onSearch"
+        @focus="onInput"
+      />
+      <button class="search-icon" @click="onSearch">🔍</button>
+    </div>
+    <div class="suggest-dropdown" :class="{ show: suggestions.length > 0 && focused }">
+      <div
+        v-for="item in suggestions"
+        :key="item.id"
+        class="suggest-item"
+        @click="onSelect(item)"
+      >
+        <span class="pin-icon">📍</span>
+        <div class="info">
+          <div class="name">{{ item.name }}</div>
+          <div class="district">{{ item.district || '' }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref } from 'vue'
+import { fetchSuggestions } from '../api/index.js'
+
+const emit = defineEmits(['select'])
+
+const keyword = ref('')
+const suggestions = ref([])
+const focused = ref(false)
+let timer = null
+
+function onInput() {
+  focused.value = true
+  const kw = keyword.value.trim()
+  if (kw.length < 1) { suggestions.value = []; return }
+  clearTimeout(timer)
+  timer = setTimeout(async () => {
+    try {
+      suggestions.value = (await fetchSuggestions(kw)) || []
+    } catch { suggestions.value = [] }
+  }, 300)
+}
+
+function onSearch() {
+  focused.value = false
+  const kw = keyword.value.trim()
+  if (!kw) return
+  fetchSuggestions(kw).then(data => {
+    if (data && data.length > 0) {
+      const first = data[0]
+      keyword.value = first.name
+      emit('select', { lng: first.lng, lat: first.lat, name: first.name })
+    }
+  }).catch(() => {})
+}
+
+function onSelect(item) {
+  focused.value = false
+  suggestions.value = []
+  keyword.value = item.name
+  emit('select', { lng: item.lng, lat: item.lat, name: item.name })
+}
+
+// 点击外部关闭
+document.addEventListener('click', (e) => {
+  const el = e.target
+  if (!el.closest('.search-bar')) {
+    focused.value = false
+  }
+})
+</script>
+
+<style scoped>
+.search-bar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  padding: 10px 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.92) 100%);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+}
+.inner { max-width: 600px; margin: 0 auto; position: relative; }
+.search-bar input {
+  width: 100%; height: 42px; padding: 0 44px 0 16px;
+  border: 1.5px solid #e0e0e0; border-radius: 21px;
+  font-size: 15px; outline: none; background: #f8f8f8;
+  transition: all 0.2s;
+}
+.search-bar input:focus { border-color: #4a90d9; background: #fff; box-shadow: 0 2px 8px rgba(74,144,217,0.15); }
+.search-icon {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 32px; height: 32px; border-radius: 50%; background: #4a90d9;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  border: none; color: #fff; font-size: 16px;
+}
+.search-icon:hover { background: #3a7bc8; }
+
+.suggest-dropdown {
+  position: absolute; top: 52px; left: 16px; right: 16px;
+  max-width: 600px; margin: 0 auto;
+  background: #fff; border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  max-height: 320px; overflow-y: auto; display: none; z-index: 101;
+}
+.suggest-dropdown.show { display: block; }
+.suggest-item {
+  padding: 12px 16px; cursor: pointer;
+  border-bottom: 1px solid #f0f0f0;
+  display: flex; align-items: center; gap: 10px;
+}
+.suggest-item:last-child { border-bottom: none; }
+.suggest-item:hover { background: #f5f8fc; }
+.pin-icon { color: #e74c3c; font-size: 18px; flex-shrink: 0; }
+.info { flex: 1; min-width: 0; }
+.name { font-size: 14px; font-weight: 500; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.district { font-size: 12px; color: #999; margin-top: 2px; }
+</style>
