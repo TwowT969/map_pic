@@ -12,7 +12,9 @@
       <div class="info-row"><span class="label">照片数</span><span class="value">{{ spot.photoCount || 0 }} 张</span></div>
       <div class="info-row"><span class="label">创建时间</span><span class="value">{{ formatTime(spot.createTime) }}</span></div>
     </div>
-    <button class="btn btn-primary btn-sm" @click="$emit('edit')">✏️ 编辑</button>
+    <div class="btn-row">
+      <button class="btn btn-primary btn-sm" @click="$emit('edit')">✏️ 编辑</button>
+    </div>
   </div>
 </template>
 
@@ -44,4 +46,7 @@ function formatTime(t) { if (!t) return '-'; return t.replace('T', ' ').substrin
 .btn-primary { background: #4a90d9; color: #fff; }
 .btn-primary:hover { background: #3a7bc8; }
 .btn-sm { padding: 5px 12px; font-size: 12px; }
+.btn-row { display: flex; gap: 8px; }
+.btn-outline { background: #fff; color: #4a90d9; border: 1px solid #4a90d9; }
+.btn-outline:hover { background: #f0f6ff; }
 </style>

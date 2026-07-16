@@ -173,6 +173,46 @@ CREATE TABLE `user` (
 ) COMMENT='用户';
 ```
 
+### 5.4 旅程表 `trip`（V2 新增）
+
+> 一次出游通常包含多个点位、多张照片。通过 `shot_time` 自动聚类，生成"旅程"，
+> 用户浏览照片时可按时间线连续翻页，而非逐点位展开。
+
+```sql
+CREATE TABLE trip (
+  id           BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id      BIGINT NOT NULL COMMENT '用户',
+  name         VARCHAR(100) COMMENT '旅程名称（可自动生成，如"7月16日苏州行"）',
+  start_time   DATETIME NOT NULL COMMENT '旅程起始时间（首张照片）',
+  end_time     DATETIME NOT NULL COMMENT '旅程结束时间（末张照片）',
+  photo_count  INT DEFAULT 0 COMMENT '照片总数',
+  spot_count   INT DEFAULT 0 COMMENT '途经点位数',
+  -- 路线摘要（points JSON 数组，存储途经点位坐标序列，用于地图连线展示）
+  route_json   JSON COMMENT '点位顺序 [{lat,lng,spotId,time}, ...]',
+  -- 封面
+  cover_url    VARCHAR(500) COMMENT '最具代表性的照片',
+  -- 自动 / 手动
+  source       TINYINT DEFAULT 0 COMMENT '0自动聚合 1手动创建',
+  create_time  DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_user (user_id),
+  INDEX idx_time (start_time)
+) COMMENT='旅程（照片时间线聚合）';
+```
+
+**photo 表新增字段**：
+```sql
+ALTER TABLE photo ADD COLUMN trip_id BIGINT COMMENT '关联旅程（可空）';
+ALTER TABLE photo ADD INDEX idx_trip (trip_id);
+ALTER TABLE photo ADD INDEX idx_user_shot (user_id, shot_time);
+```
+
+**旅程自动聚合算法**：
+- 按 `user_id` + `shot_time` 排序
+- 相邻两张照片间隔 > N 小时（默认 6h，可配）→ 切分为两个旅程
+- 同一旅程内照片按 `shot_time` 升序排列，形成"轨迹"
+- 每张新照片上传时，检查是否可归入最近的进行中旅程（间隔 < 6h），是则追加，否则开启新旅程
+- 已聚合的旅程支持手动合并/拆分
+
 ---
 
 ## 六、核心接口设计（REST API）
@@ -207,6 +247,35 @@ GET /api/photos/map?minLat=30.1&maxLat=30.3&minLng=120.1&maxLng=120.3&zoom=12
 
 > 缩放级别低（zoom 小）时返回聚合点；级别高时返回单张照片 Marker。后端按 zoom 决定聚合粒度。
 
+### 旅程相关接口（V2）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/trips` | 用户的旅程列表（按时间倒序） |
+| GET | `/api/trips/{id}` | 旅程详情（含照片列表、路线坐标序列） |
+| GET | `/api/trips/{id}/photos` | 旅程内所有照片（按 shot_time 升序，用于连续翻页预览） |
+| GET | `/api/photos/timeline` | 用户全部照片时间线（`?userId=&date=` 按天过滤，`?tripId=` 按旅程过滤），统一按 shot_time 排序 |
+| POST | `/api/trips/{id}/merge` | 合并两个旅程 |
+| POST | `/api/trips/{id}/split` | 在指定位置拆分旅程 |
+
+**时间线查询示例**（光箱连续翻页的数据源）：
+```
+GET /api/photos/timeline?userId=2&tripId=1
+→ 按 shot_time 升序返回照片列表 [{id, url, spotId, spotName, shotTime, lat, lng}, ...]
+→ 前端光箱按此列表 prev/next 翻页
+```
+
+**旅程路线示例**（地图连线展示）：
+```
+GET /api/trips/{id}
+→ { name, startTime, endTime,
+    route: [{lat, lng, spotId, spotName, time, photoCount}, ...],
+    photos: [...]
+  }
+→ 前端在 map 上用 AMap.Polyline 依次连接 route 中坐标，
+   标记出"上午 → 下午"的游览轨迹
+```
+
 ---
 
 ## 七、关键技术点与实现思路
@@ -240,6 +309,99 @@ GET /api/photos/map?minLat=30.1&maxLat=30.3&minLng=120.1&maxLng=120.3&zoom=12
 - 单用户上传频率限制：Redis + Lua 令牌桶（如每分钟最多 10 张）。
 - 接口鉴权：Spring Security + JWT。
 
+### 7.7 照片旅程（Trip）与连续预览（V2 新增）
+
+#### 7.7.1 旅程自动聚合（后端）
+
+**触发时机**：
+- 每次照片上传成功后，异步检查是否归入旅程（不阻塞上传响应）
+- 定时任务（每小时）兜底：扫描无 `trip_id` 的照片，尝试聚合
+
+**聚合逻辑**：
+```
+1. 按 user_id + shot_time ASC 排序
+2. 遍历照片：
+   a. 若当前无进行中旅程 → 新建旅程，首张照片为起点
+   b. 若与前一张间隔 < 6h → 归入当前旅程
+   c. 若间隔 >= 6h → 闭合当前旅程，开启新旅程
+3. 更新旅程 route_json（追加点位坐标序列）
+4. 更新旅程 photo_count / spot_count
+```
+
+**降级方案（MVP 可先不做 trip 表，纯前端实现）**：
+- 后端只提供 `/api/photos/timeline?userId=2`，按 shot_time 排序返回所有照片
+- 前端在光箱中按此顺序翻页
+- 前端按日期分组展示（`2026-07-16` / `2026-07-15` …）
+- 不涉及 trip 表、不画路线连线
+
+#### 7.7.2 连续图片预览（前端光箱）
+
+**现状**：光箱只显示单张图片 + 关闭按钮。浏览同一地点的多张照片需要反复打开/关闭。
+
+**目标**：光箱支持 **上一张 / 下一张** 按钮，在「全部照片时间线」或「当前旅程照片」列表中连续翻页。
+
+**实现方案**（组件化）：
+
+```
+PhotoLightbox.vue（改造）
+  ├── props: photos: Photo[]     ← 照片列表（当前上下文）
+  ├── props: index: number       ← 当前显示的照片索引
+  ├── 左侧箭头 ← @click → index-- → emit('prev')
+  ├── 右侧箭头 → @click → index++ → emit('next')
+  ├── 底部计数 "3 / 15"
+  ├── 键盘事件 ← → 左右箭头翻页
+  └── 手势滑动（移动端）
+```
+
+**数据来源**：
+- **点位面板内**：`photos` = 当前点位照片（现有行为），翻页范围仅此点位
+- **全局时间线**：`photos` = `/api/photos/timeline` 返回的全部有序照片，翻页跨点位
+- **旅程内**：`photos` = `/api/trips/{id}/photos`，按游览顺序翻页
+
+**入口**：
+1. 点位面板 PhotoGrid 点击任意照片 → 光箱打开，`photos` = 当前点位照片列表（现有行为）
+2. 新增"时间线"按钮（地图角落）→ 按日期分组时间线面板 → 点击照片 → 光箱打开，`photos` = 当日全部照片
+3. 旅程详情页 → 点击照片 → 光箱打开，`photos` = 旅程全部照片
+
+#### 7.7.3 路线可视化（进阶）
+
+用户某一天/一次出游的"游览轨迹"在地图上连线展示：
+
+```
+1. 获取旅程 route_json [{lat, lng, spotId, time}, ...]
+2. 后端已排序（按 shot_time ASC）
+3. 前端用 AMap.Polyline 依次连接坐标：
+   const polyline = new AMap.Polyline({
+     path: route.map(p => [p.lng, p.lat]),
+     strokeColor: '#4a90d9',
+     strokeWeight: 4,
+     strokeStyle: 'dashed',    // 虚线，区分于道路
+     showDir: true,            // 显示方向箭头，看出移动方向
+   })
+   map.add(polyline)
+4. 每个节点叠加 Marker（照片缩略图），可点击查看该点位的所有照片
+5. 点击路线 → 弹出该段的时间和移动距离
+```
+
+#### 7.7.4 时间线面板 UI
+
+```
+┌─────────────────────────────┐
+│  📅 2026-07-16  苏州         │  ← 日期分组 Header
+│  ┌──┐ ┌──┐ ┌──┐ ┌──┐       │
+│  │  │ │  │ │  │ │  │       │  ← 照片缩略图网格
+│  └──┘ └──┘ └──┘ └──┘       │
+│  09:30  10:15  14:00  16:30  │  ← 拍摄时间
+│  🗺 查看路线                 │  ← 跳转到地图路线
+├─────────────────────────────┤
+│  📅 2026-07-15  杭州         │
+│  ┌──┐ ┌──┐                  │
+│  │  │ │  │                  │
+│  └──┘ └──┘                  │
+│  ...                        │
+└─────────────────────────────┘
+```
+
 ---
 
 ## 八、进阶架构（Kafka / Canal / Redis）
@@ -270,25 +432,44 @@ photo.upload topic
 
 ## 九、开发路线图
 
-### MVP（2-3 周）-- 打通主链路
-- [ ] 建库建表（`scenic_spot` + `photo` + `user`）
-- [ ] 后端：OSS 上传凭证接口 + 照片保存接口 + 地图范围查询接口
-- [ ] 前端：地图主页（高德聚合点）+ 拍照上传页
-- [ ] 跑通：拍照 -> 上传 OSS -> 落库 -> 地图上看到
+### MVP（2-3 周）-- 打通主链路 ✅ 已完成
+
+> **当前实现**：Vue3 + Vite Web 前端（非 Uni-app App），Spring Boot 2.7.18 后端，本地开发模式。
+> 暂未接入 SSO，使用硬编码 `userId=2` (admin) 作为默认用户。照片存储为本地文件系统。
+
+- [x] 建库建表（`user` + `spot` + `photo`）-- `sql/init.sql`
+- [x] 后端：点位 CRUD（`/api/spots`）+ 照片 CRUD（`/api/photos`）+ IP 定位（`/api/location/ip`）+ 搜索提示（高德 inputtips）+ AMap 配置下发
+- [x] 前端：地图主页（高德 JS API v2.0 + AMapLoader）+ MarkerCluster 聚合标记 + 自定义 Marker（照片缩略图）
+- [x] 前端：搜索框（毛玻璃透明）+ 点位创建/编辑/删除面板 + 照片上传/删除/网格预览 + 灯箱
+- [x] 前端：EXIF GPS 自动解析 → 自动创建点位 + 上传照片
+- [x] 前端：地图控件（ToolBar 缩放 + Scale 比例尺 + Geolocation 定位）
+- [x] 跑通：拍照上传 → 本地存储 → 落库 → 地图 Marker 展示 → 点击查看/编辑
+
+**MVP 超出部分（原计划 V1 项提前实现）**：
+- [x] 地图聚合优化（AMap.MarkerCluster，weight 权重区分有/无照片）
+- [x] 点位详情 / 照片管理
+- [x] 上传图片 EXIF 位置信息自动解析（`exifr` 前端解析 GPS）
+- [ ] SSO 登录 -- **暂缓**，本地测试用 admin(uid=2) 硬编码，待部署前接入 JWT
 
 ### V1（2 周）-- 补全基础能力
-- [ ] 用户注册登录（JWT）
+
+- [ ] 用户注册登录（SSO/JWT）
+- [ ] OSS 对象存储（替代本地文件系统）
 - [ ] 缩略图生成
-- [ ] 地图聚合优化（按 zoom 分级）
-- [ ] 我的相册 / 照片详情
-- [ ] 后台管理端（景点录入、照片审核）
+- [ ] 光箱连续翻页预览（上/下一张） ← 从 V2 提前
+- [ ] 时间线面板（按日期分组浏览照片） ← 从 V2 提前
+- [ ] 后台管理端（点位/照片审核）
 
 ### V2（2-3 周）-- 进阶与健壮性
+
 - [ ] Kafka 异步流水线（缩略图/EXIF/审核）
 - [ ] Redis 缓存
 - [ ] 内容审核接入
 - [ ] Canal + ES 全文搜索
 - [ ] 防盗刷、弱网断点续传
+- [ ] 照片旅程（Trip）自动聚合（`trip` 表 + 后端聚合算法）
+- [ ] 路线可视化（Polyline 串联游览轨迹）
+- [ ] Uni-app 手机端打包（安卓 + iOS）
 
 ---
 
@@ -326,10 +507,16 @@ services:
 
 ## 附：技术栈速查
 
-- 前端：Uni-app + Vue3 + uni-ui
-- 后端：Spring Boot 3 + MyBatis-Plus + Spring Security + JWT
-- 中间件：MySQL 8 + Redis 7 + Kafka
-- 存储：阿里云 OSS + CDN
-- 地图：高德地图（App 组件 + JS API）
-- 部署：Docker + Nginx + 阿里云 ECS
-- 进阶：Canal + Elasticsearch
+| 层 | 计划 | 当前实现 |
+|---|---|---|
+| 手机端 | Uni-app（Vue3 语法） | **暂未实现**，目前为 Vue3 + Vite Web 前端（`map-album-web/`） |
+| 后台管理端 | Vue3 + 高德 JS API | **同一 Web 前端**，地图主页即管理端 |
+| 后端 | Spring Boot 3 + MyBatis-Plus + Spring Security | **Spring Boot 2.7.18** + MyBatis-Plus 3.5.5，暂未接入 Security |
+| 数据库 | MySQL 8（空间索引 SPATIAL） | ✅ MySQL 8，InnoDB，POINT 列已建但 TypeHandler 待补 |
+| 缓存 | Redis 7 | ⏳ 已配置未启用 |
+| 消息队列 | Kafka（图片处理流水线） | ⏳ docker-compose 已配置未启用 |
+| 对象存储 | 阿里云 OSS + CDN | ⏳ **当前为本地文件系统**（`C:\Users\DELL\Desktop\STOAGE`） |
+| 地图 | 高德：JS API v2.0 + Web 服务 API | ✅ `AMapLoader` + `AMap.MarkerCluster` + inputtips + IP 定位 + 逆地理编码 |
+| 前端构建 | — | Vite 5 + `http-server`（生产） |
+| 部署 | Docker + Nginx + 阿里云 ECS | ⏳ **当前仅本地开发**（`mvn spring-boot:run` / `npm run dev`） |
+| 认证 | Spring Security + JWT / SSO | ⏳ **暂硬编码 admin(uid=2)**，SSO 待接入 |

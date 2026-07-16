@@ -60,7 +60,8 @@ const props = defineProps({
   spot: { type: Object, default: null },
   photos: { type: Array, default: () => [] },
   isCreating: { type: Boolean, default: false },
-  initialCoord: { type: Object, default: () => ({}) }
+  initialCoord: { type: Object, default: () => ({}) },
+  autoEdit: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['close', 'created', 'updated', 'deleted', 'upload', 'deletePhoto'])
@@ -68,9 +69,12 @@ const emit = defineEmits(['close', 'created', 'updated', 'deleted', 'upload', 'd
 const editing = ref(false)
 const show = ref(false)
 
-// 挂载后下一帧触发滑入动画
+// 挂载后下一帧触发滑入动画，autoEdit 时直接进入编辑模式
 onMounted(() => {
-  nextTick(() => { show.value = true })
+  nextTick(() => {
+    show.value = true
+    if (props.autoEdit && props.spot) editing.value = true
+  })
 })
 
 function handleClose() {

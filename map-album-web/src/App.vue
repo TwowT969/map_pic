@@ -5,16 +5,25 @@
       @map-ready="onMapReady"
       @spot-click="onSpotClick"
     />
-    <!-- 浮动创建按钮 -->
-    <button class="fab-add" @click="startCreateSpot" title="添加点位">
-      <span>+</span>
-    </button>
+    <!-- 浮动创建按钮 + 菜单 -->
+    <div class="fab-wrapper" :class="{ open: fabOpen }">
+      <button class="fab-add" @click="fabOpen = !fabOpen" title="添加">
+        <span>{{ fabOpen ? '✕' : '+' }}</span>
+      </button>
+      <div class="fab-menu">
+        <button class="fab-menu-item" @click="onFabAddSpot">📌 添加点位</button>
+        <button class="fab-menu-item" @click="onFabUploadPhoto">📷 上传图片</button>
+      </div>
+    </div>
+    <!-- 上传图片的隐藏 input -->
+    <input type="file" id="exifFileInput" accept="image/*" multiple style="display:none" @change="onExifFilesSelected">
     <SpotPanel
       v-if="panelVisible"
       :spot="currentSpot"
       :photos="currentPhotos"
       :is-creating="isCreating"
       :initial-coord="createCoord"
+      :auto-edit="autoEdit"
       @close="closePanel"
       @created="onSpotCreated"
       @updated="onSpotUpdated"
@@ -33,6 +42,9 @@
 
 <script setup>
 import { ref, computed, provide, onMounted, onBeforeUnmount } from 'vue'
+import exifr from 'exifr'
+import { uploadPhoto } from './api/index.js'
+import { wgs84ToGcj02 } from './utils/coord.js'
 import SearchBar from './components/SearchBar.vue'
 import MapContainer from './components/MapContainer.vue'
 import SpotPanel from './components/SpotPanel.vue'
@@ -79,7 +91,7 @@ provide('openLightbox', (src) => { lightboxSrc.value = src })
 async function onMapReady(containerId) {
   try {
     const m = await initMap(containerId)
-    spotsStore.bind(m, getAMap(), () => photosStore.latestPhotoMap.value)
+    await spotsStore.bind(m, getAMap(), () => photosStore.latestPhotoMap.value)
     m.on('click', async (e) => {
       if (!spotsStore.isCreating.value) return
       // 1. 放置标记
@@ -89,6 +101,7 @@ async function onMapReady(containerId) {
       createCoord.value = { lng: coord.lng, lat: coord.lat, address: '', province: '', city: '', district: '' }
       currentSpot.value = null
       isCreating.value = true
+      autoEdit.value = false
       panelVisible.value = true
 
       // 3. 后台逆地理编码，回填地址
@@ -150,8 +163,12 @@ function onSearchSelect({ lng, lat, name }) {
   showToast('已定位到: ' + name)
 }
 
-// 浮动按钮 → 进入创建模式
-function startCreateSpot() {
+const fabOpen = ref(false)
+const autoEdit = ref(false)
+
+// FAB 菜单：添加点位
+function onFabAddSpot() {
+  fabOpen.value = false
   if (panelVisible.value) panelVisible.value = false
   currentSpot.value = null
   isCreating.value = false
@@ -160,17 +177,182 @@ function startCreateSpot() {
   showToast('点击地图放置点位标记')
 }
 
+// FAB 菜单：上传图片（含 EXIF 解析）
+function onFabUploadPhoto() {
+  fabOpen.value = false
+  document.getElementById('exifFileInput').click()
+}
+
+// 全局点击关闭 FAB 菜单
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.fab-wrapper')) fabOpen.value = false
+})
+
+// 待上传文件缓存（无 EXIF 的文件等待用户点击地图后上传）
+let _pendingFilesNoGps = []
+
+// EXIF 文件选择处理
+async function onExifFilesSelected(e) {
+  const files = Array.from(e.target.files || [])
+  e.target.value = ''
+  if (files.length === 0) return
+
+  showToast('正在解析照片位置信息…')
+
+  // 1. 逐个解析 EXIF GPS
+  const withGps = []    // { file, lng, lat }
+  const withoutGps = []
+
+  for (const file of files) {
+    try {
+      const gps = await exifr.parse(file, { gps: true })
+      if (gps && gps.latitude != null && gps.longitude != null) {
+        // EXIF GPS 是 WGS84，转 GCJ-02 对齐高德底图
+        const gcj = wgs84ToGcj02({ lng: gps.longitude, lat: gps.latitude })
+        withGps.push({ file, lng: gcj.lng, lat: gcj.lat })
+      } else {
+        withoutGps.push(file)
+      }
+    } catch {
+      withoutGps.push(file)
+    }
+  }
+
+  // 2. 有 GPS 的文件：分组（同坐标 ±0.0003° ≈ 30m 内合并），创建/匹配点位并上传
+  let uploadedCount = 0
+  const processedLocs = []  // 避免重复创建
+  let lastSpotId = null      // 最后操作的点位，用于跳转编辑
+  let lastSpotIsNew = false  // 是否新创建
+
+  for (const item of withGps) {
+    const roundLng = Math.round(item.lng * 10000) / 10000
+    const roundLat = Math.round(item.lat * 10000) / 10000
+
+    if (processedLocs.some(p => p.lng === roundLng && p.lat === roundLat)) continue
+    processedLocs.push({ lng: roundLng, lat: roundLat })
+
+    // 查找 50m 范围内的已有点位
+    const nearby = spotsStore.spots.value.find(s =>
+      Math.abs(s.lng - item.lng) < 0.0005 && Math.abs(s.lat - item.lat) < 0.0005
+    )
+
+    let spotId
+    if (nearby) {
+      spotId = nearby.id
+      lastSpotIsNew = false
+    } else {
+      // 自动创建点位
+      let address = '', province = '', city = '', district = ''
+      try {
+        const geocoder = await createGeocoder()
+        const addrResult = await new Promise((resolve) => {
+          geocoder.getAddress([item.lng, item.lat], (status, result) => {
+            resolve(status === 'complete' && result.regeocode ? result.regeocode : null)
+          })
+        })
+        if (addrResult) {
+          address = addrResult.formattedAddress || ''
+          province = (addrResult.addressComponent || {}).province || ''
+          city = (addrResult.addressComponent || {}).city || ''
+          district = (addrResult.addressComponent || {}).district || ''
+        }
+      } catch (ex) { /* ignore */ }
+
+      try {
+        const newSpot = await spotsStore.create({
+          name: '相机拍摄 ' + item.lat.toFixed(4) + ', ' + item.lng.toFixed(4),
+          lat: item.lat, lng: item.lng,
+          address, province, city, district,
+          category: 'scenic',
+          userId: 2
+        })
+        spotId = newSpot.id
+        lastSpotIsNew = true
+        photosStore.photosBySpot.value = { ...photosStore.photosBySpot.value, [spotId]: [] }
+      } catch (ex) {
+        console.error('[exif] spot create failed:', ex)
+        continue
+      }
+    }
+
+    lastSpotId = spotId
+
+    // 上传该坐标下的所有文件
+    const groupFiles = withGps.filter(f =>
+      Math.abs(f.lng - item.lng) < 0.0003 && Math.abs(f.lat - item.lat) < 0.0003
+    )
+    for (const gf of groupFiles) {
+      try {
+        await uploadPhoto(spotId, gf.file, '')
+        uploadedCount++
+      } catch (ex) {
+        console.error('[exif] upload failed:', gf.file.name, ex)
+      }
+    }
+  }
+
+  // 3. 刷新数据
+  if (uploadedCount > 0) {
+    await photosStore.loadAllPhotos()
+    spotsStore.renderAllMarkers()
+  }
+
+  // 4. 跳转到最后一个点位的位置，弹出编辑面板
+  if (lastSpotId && uploadedCount > 0) {
+    const lastSpot = spotsStore.spots.value.find(s => s.id === lastSpotId)
+    if (lastSpot) {
+      // 地图跳转
+      map.value?.setCenter([lastSpot.lng, lastSpot.lat])
+      map.value?.setZoom(16)
+
+      // 弹出编辑面板（自动进入编辑模式）
+      autoEdit.value = true
+      currentSpot.value = lastSpot
+      isCreating.value = false
+      spotsStore.isCreating.value = false
+      spotsStore.cancelCreateMode()
+      panelVisible.value = true
+
+      // 加载新点位照片
+      await photosStore.loadPhotos(lastSpotId)
+
+      showToast(`已上传 ${uploadedCount} 张照片，请编辑点位信息`, 'success')
+    }
+  }
+
+  // 5. 无 GPS 的文件 → 进入创建模式手动放置
+  if (withoutGps.length > 0) {
+    _pendingFilesNoGps = withoutGps
+    fabOpen.value = false
+    if (panelVisible.value) panelVisible.value = false
+    currentSpot.value = null
+    isCreating.value = false
+    spotsStore.cancelCreateMode()
+    spotsStore.startCreateMode()
+    showToast(`${withoutGps.length} 张照片无位置信息，请点击地图放置点位`, 'info')
+  }
+
+  if (uploadedCount === 0 && withoutGps.length === 0) {
+    showToast('未找到可用的照片', 'error')
+  }
+}
+
+
+
 // 点位点击 → 打开面板
 function onSpotClick(spot) {
   currentSpot.value = spot
   isCreating.value = false
   spotsStore.isCreating.value = false
   spotsStore.cancelCreateMode()
+  autoEdit.value = false
   panelVisible.value = true
   photosStore.loadPhotos(spot.id)
 }
 
 function closePanel() {
+  _pendingFilesNoGps = []
+  autoEdit.value = false
   panelVisible.value = false
   currentSpot.value = null
   isCreating.value = false
@@ -180,13 +362,31 @@ function closePanel() {
 async function onSpotCreated(spotData) {
   try {
     const spot = await spotsStore.create({ ...spotData, userId: 2 })
-    // 清理创建模式的 marker 和状态
     spotsStore.cancelCreateMode()
     photosStore.photosBySpot.value = { ...photosStore.photosBySpot.value, [spot.id]: [] }
     currentSpot.value = spot
     isCreating.value = false
-    showToast('点位创建成功', 'success')
-    console.log('[App] 点位创建完成 id=' + spot.id + ' name=' + spot.name)
+
+    // 如果有待上传的无 GPS 照片，自动上传到新点位
+    if (_pendingFilesNoGps.length > 0) {
+      let up = 0
+      for (const file of _pendingFilesNoGps) {
+        try {
+          await uploadPhoto(spot.id, file, '')
+          up++
+        } catch (ex) { console.error('[exif] pending upload failed:', file.name, ex) }
+      }
+      _pendingFilesNoGps = []
+      await photosStore.loadPhotos(spot.id)
+      await photosStore.loadAllPhotos()
+      spotsStore.renderAllMarkers()
+      currentSpot.value = { ...spot, photoCount: up }
+      showToast(`点位创建成功，已上传 ${up} 张照片`, 'success')
+      console.log('[App] 点位创建完成(含照片) id=' + spot.id + ' photos=' + up)
+    } else {
+      showToast('点位创建成功', 'success')
+      console.log('[App] 点位创建完成 id=' + spot.id + ' name=' + spot.name)
+    }
   } catch (e) {
     showToast('创建失败: ' + e.message, 'error')
   }
@@ -277,8 +477,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeyDown))
 html, body, #app { width: 100%; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; overflow: hidden; }
 .app-root { width: 100%; height: 100%; position: relative; }
 
-.fab-add {
+.fab-wrapper {
   position: fixed; top: 64px; right: 20px; z-index: 150;
+}
+.fab-add {
   width: 48px; height: 48px; border-radius: 50%;
   background: #4a90d9; color: #fff;
   border: none; cursor: pointer; font-size: 26px;
@@ -287,9 +489,30 @@ html, body, #app { width: 100%; height: 100%; font-family: -apple-system, BlinkM
   transition: transform 0.2s, box-shadow 0.2s;
   user-select: none;
 }
-.fab-add:hover {
-  transform: scale(1.1);
-  box-shadow: 0 6px 20px rgba(74,144,217,0.55);
-}
+.fab-add:hover { transform: scale(1.1); box-shadow: 0 6px 20px rgba(74,144,217,0.55); }
 .fab-add:active { transform: scale(0.95); }
+
+.fab-menu {
+  position: absolute; top: 56px; right: 0;
+  background: #fff; border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  overflow: hidden;
+  opacity: 0; transform: translateY(-8px);
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+  min-width: 160px;
+}
+.fab-wrapper.open .fab-menu {
+  opacity: 1; transform: translateY(0);
+  pointer-events: auto;
+}
+
+.fab-menu-item {
+  display: block; width: 100%; padding: 12px 18px;
+  border: none; background: #fff; cursor: pointer;
+  font-size: 14px; text-align: left; white-space: nowrap;
+  transition: background 0.15s;
+}
+.fab-menu-item:hover { background: #f5f8fc; }
+.fab-menu-item + .fab-menu-item { border-top: 1px solid #f0f0f0; }
 </style>
