@@ -1,5 +1,7 @@
 import { shallowRef } from 'vue'
 import { fetchAmapConfig, fetchIpLocation } from '../api/index.js'
+import { hasCapacitor, getCurrentPosition } from '../utils/capacitor.js'
+import { wgs84ToGcj02 } from '../utils/coord.js'
 
 const map = shallowRef(null)
 let AMapGlobal = null
@@ -99,10 +101,16 @@ export function useAmap() {
    * 参考官方示例：AMap.plugin(name, callback) -> new -> map.addControl
    */
   function addControls(m) {
+    // 检测移动端调整控件位置
+    const isMobile = window.innerWidth <= 768
+
     // 1. 缩放工具条
     AMapGlobal.plugin('AMap.ToolBar', () => {
       const toolbar = new AMapGlobal.ToolBar({
-        position: { right: '20px', bottom: '90px' }
+        position: {
+          right: '20px',
+          bottom: isMobile ? '170px' : '90px'
+        }
       })
       m.addControl(toolbar)
     })
@@ -116,17 +124,16 @@ export function useAmap() {
     // 3. 定位控件
     AMapGlobal.plugin('AMap.Geolocation', () => {
       const geolocation = new AMapGlobal.Geolocation({
-        enableHighAccuracy: true,   // 高精度定位
-        timeout: 10000,             // 超时 10s
-        buttonPosition: 'RB',       // 定位按钮右下
-        buttonOffset: new AMapGlobal.Pixel(20, 140),
-        zoomToAccuracy: true,       // 定位后调整视野
-        showMarker: true,           // 显示定位点
-        showCircle: true,           // 显示定位精度圈
-        panToLocation: true         // 定位后移动到定位点
+        enableHighAccuracy: true,
+        timeout: 10000,
+        buttonPosition: 'RB',
+        buttonOffset: new AMapGlobal.Pixel(20, isMobile ? 230 : 140),
+        zoomToAccuracy: true,
+        showMarker: true,
+        showCircle: true,
+        panToLocation: true
       })
       m.addControl(geolocation)
-      // 暴露给外部，便于主动触发 getCurrentPosition
       _geolocation = geolocation
     })
     console.log('[useAmap] 地图控件已添加（ToolBar / Scale / Geolocation）')
@@ -178,11 +185,50 @@ export function useAmap() {
     })
   }
 
+  /**
+   * 使用原生 GPS 定位（Capacitor），更精准。
+   * 自动将 WGS-84 转为 GCJ-02，然后设置地图中心。
+   */
+  async function locateNative() {
+    if (!hasCapacitor()) {
+      // 降级为浏览器定位
+      try {
+        const result = await locate()
+        return result
+      } catch (e) {
+        throw new Error('浏览器定位失败: ' + e.message)
+      }
+    }
+
+    try {
+      const pos = await getCurrentPosition()
+      // Capcitor 返回的是 WGS-84，转为 GCJ-02
+      const gcj = wgs84ToGcj02({ lng: pos.lng, lat: pos.lat })
+      if (map.value) {
+        map.value.setCenter([gcj.lng, gcj.lat])
+        map.value.setZoom(15)
+      }
+      return { position: { lng: gcj.lng, lat: gcj.lat } }
+    } catch (e) {
+      console.warn('[useAmap] 原生定位失败，降级 IP 定位:', e)
+      try {
+        const loc = await fetchIpLocation()
+        if (map.value) {
+          map.value.setCenter([loc.lng, loc.lat])
+          map.value.setZoom(13)
+        }
+        return { position: { lng: loc.lng, lat: loc.lat } }
+      } catch (e2) {
+        throw new Error('定位失败: ' + (e.message || ''))
+      }
+    }
+  }
+
   /** 脱敏输出：只显示前后各 4 位 */
   function mask(s) {
     if (!s || s.length <= 8) return s || '(空)'
     return s.substring(0, 4) + '****' + s.substring(s.length - 4)
   }
 
-  return { map, initMap, getAMap, loadPlugin, createGeocoder, locate }
+  return { map, initMap, getAMap, loadPlugin, createGeocoder, locate, locateNative }
 }

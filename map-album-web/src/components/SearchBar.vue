@@ -85,9 +85,10 @@ document.addEventListener('click', (e) => {
 .search-bar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 100;
   padding: 10px 16px;
-  /* 外层透明，不遮挡地图 */
   background: transparent;
-  pointer-events: none; /* 让空白处点击穿透到地图 */
+  pointer-events: none;
+  /* 安全区域 */
+  padding-top: max(10px, env(safe-area-inset-top));
 }
 .inner { max-width: 600px; margin: 0 auto; position: relative; pointer-events: auto; }
 .search-bar input {
@@ -96,6 +97,7 @@ document.addEventListener('click', (e) => {
   font-size: 15px; outline: none;
   background: rgba(255,255,255,0.75);
   backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   transition: all 0.2s;
   color: #333;
 }

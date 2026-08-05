@@ -1,5 +1,7 @@
 // API 基础配置
-const API_BASE = '/api'
+// 浏览器开发：未设 VITE_API_BASE 时回退 /api，走 vite.config.js 的 proxy -> localhost:48081
+// APK 打包：构建时注入 VITE_API_BASE=http://<PC局域网IP>:48081/api（见 .env.production.example）
+const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 const DEFAULT_USER_ID = 2
 
 async function request(url, options = {}) {

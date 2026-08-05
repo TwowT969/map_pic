@@ -96,9 +96,23 @@ function onSubmit() {
 .btn {
   padding: 8px 18px; border-radius: 8px; border: none; cursor: pointer;
   font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;
+  min-height: 44px; /* 移动端最低触摸尺寸 */
+  -webkit-tap-highlight-color: transparent;
 }
 .btn-primary { background: #4a90d9; color: #fff; }
 .btn-primary:hover { background: #3a7bc8; }
+.btn-primary:active { background: #2e6cb8; }
 .btn-block { width: 100%; justify-content: center; margin-top: 6px; }
 .btn-cancel { background: #f5f5f5; color: #666; margin-top: 8px; }
+
+/* 移动端放大表单控件 */
+@media (max-width: 768px) {
+  .form-group input, .form-group textarea, .form-group select {
+    padding: 10px 12px; font-size: 16px; /* 16px 防止 iOS 缩放 */
+    min-height: 44px;
+  }
+  .form-group textarea { min-height: 80px; }
+  .form-group label { font-size: 14px; margin-bottom: 6px; }
+  .form-row { gap: 8px; }
+}
 </style>

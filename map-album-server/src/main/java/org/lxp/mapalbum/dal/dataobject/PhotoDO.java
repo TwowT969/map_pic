@@ -15,7 +15,8 @@ import java.time.LocalDateTime;
  * 照片 DO（KSHG 规范 §7.3）。
  *
  * <p>每张照片归属于一个点位（spotId NOT NULL）；关联 SSO 服务（ssoUserId 冗余）。
- * URL/thumbUrl 存 OSS 地址，文件不入库。审核状态支持待审/通过/驳回三级。
+ * url/thumbUrl 存 OSS object key（私有 bucket，文件不入库；读取时由 OssClient 生成签名 URL）。
+ * 审核状态支持待审/通过/驳回三级。
  *
  * <p>geo(POINT) 字段同 {@link SpotDO}，暂排除自动映射，后续加 TypeHandler。
  *
@@ -42,10 +43,10 @@ public class PhotoDO extends BaseDO {
 
     // ===== 存储 =====
 
-    /** OSS 原图 URL */
+    /** OSS 原图 object key（读取时签名下发） */
     private String url;
 
-    /** 缩略图 URL */
+    /** 缩略图 object key（读取时签名下发） */
     private String thumbUrl;
 
     // ===== 图片元数据（EXIF + OSS 回写） =====

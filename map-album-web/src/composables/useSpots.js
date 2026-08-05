@@ -71,7 +71,9 @@ export function useSpots() {
       latestPhoto ? { thumbUrl: latestPhoto.thumbUrl || latestPhoto.url } : null
     )
     context.marker.setContent(content)
-    context.marker.setOffset(new _amap.Pixel(0, -8))
+    context.marker.setAnchor('bottom-center')
+    // 针尖在 wrapper 底部，offset (0,0) 即可精准扎在坐标上
+    context.marker.setOffset(new _amap.Pixel(0, 0))
 
     // 点击 → 选中点位
     context.marker.on('click', () => {

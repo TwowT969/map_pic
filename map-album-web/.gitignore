@@ -1,3 +1,7 @@
 node_modules/
 dist/
 .cache/
+
+# 本地环境变量（机器相关，含局域网 IP，勿提交；模板见 .env.production.example）
+.env.local
+.env.*.local

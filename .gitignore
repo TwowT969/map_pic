@@ -52,3 +52,15 @@ HELP.md
 *.keystore
 *.jks
 keystore/
+
+### Capacitor（原生平台构建产物不提交）###
+**/android/app/build/
+**/android/build/
+**/android/.gradle/
+**/android/captures/
+**/android/local.properties
+**/ios/DerivedData/
+**/ios/Pods/
+**/ios/build/
+node_modules/
+map-album-web/dist/

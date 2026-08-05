@@ -8,28 +8,23 @@ import org.lxp.mapalbum.dal.mysql.PhotoMapper;
 import org.lxp.mapalbum.dal.mysql.SpotMapper;
 import org.lxp.mapalbum.framework.common.util.BeanUtils;
 import org.lxp.mapalbum.framework.mybatis.query.LambdaQueryWrapperX;
-import org.springframework.beans.factory.annotation.Value;
+import org.lxp.mapalbum.framework.oss.OssClient;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
-import java.io.File;
-import java.io.IOException;
-import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
-import static org.lxp.mapalbum.enums.ErrorCodeConstants.PHOTO_UPLOAD_FAIL;
 import static org.lxp.mapalbum.enums.ErrorCodeConstants.SPOT_NOT_EXISTS;
 import static org.lxp.mapalbum.framework.common.exception.ServiceExceptionUtil.exception;
 
 /**
  * 照片 Service 实现（KSHG 规范 §6）。
+ *
+ * <p>照片文件存储在阿里云 OSS（私有 bucket），DB 仅存 OSS object key；
+ * 读取时由 {@link OssClient#signedUrl(String)} 生成临时签名 URL 下发前端。
  *
  * @author lxp
  */
@@ -37,14 +32,14 @@ import static org.lxp.mapalbum.framework.common.exception.ServiceExceptionUtil.e
 @Service
 public class PhotoServiceImpl implements PhotoService {
 
-    @Value("${app.upload.path:C:\\Users\\DELL\\Desktop\\STOAGE}")
-    private String uploadPath;
-
     @Resource
     private PhotoMapper photoMapper;
 
     @Resource
     private SpotMapper spotMapper;
+
+    @Resource
+    private OssClient ossClient;
 
     @Override
     public List<PhotoRespVO> listByUserId(Long userId) {
@@ -56,7 +51,9 @@ public class PhotoServiceImpl implements PhotoService {
                 .orderByDesc(PhotoDO::getCreateTime);
         List<PhotoDO> list = photoMapper.selectList(query);
         log.debug("[listByUserId][userId={}] 查询到 {} 条照片", userId, list.size());
-        return BeanUtils.toBean(list, PhotoRespVO.class);
+        List<PhotoRespVO> vos = BeanUtils.toBean(list, PhotoRespVO.class);
+        vos.forEach(this::signUrls);
+        return vos;
     }
 
     @Override
@@ -70,7 +67,9 @@ public class PhotoServiceImpl implements PhotoService {
                 .orderByDesc(PhotoDO::getCreateTime);
         List<PhotoDO> list = photoMapper.selectList(query);
         log.debug("[listBySpotId][spotId={}] 查询到 {} 张照片", spotId, list.size());
-        return BeanUtils.toBean(list, PhotoRespVO.class);
+        List<PhotoRespVO> vos = BeanUtils.toBean(list, PhotoRespVO.class);
+        vos.forEach(this::signUrls);
+        return vos;
     }
 
     @Override
@@ -82,15 +81,16 @@ public class PhotoServiceImpl implements PhotoService {
             throw exception(SPOT_NOT_EXISTS);
         }
 
-        // 2. 保存文件
-        String fileUrl = saveFile(file, spotId, userId);
+        // 2. 上传到 OSS，拿到 object key（DB 只存 key，不存会过期的签名 URL）
+        String objectKey = buildObjectKey(file, spotId);
+        ossClient.upload(file, objectKey);
 
         // 3. 创建照片记录
         PhotoDO photo = new PhotoDO();
         photo.setSpotId(spotId);
         photo.setUserId(userId);
-        photo.setUrl(fileUrl);
-        photo.setThumbUrl(fileUrl); // 后续可生成缩略图替换
+        photo.setUrl(objectKey);
+        photo.setThumbUrl(objectKey); // 后续可生成缩略图，单独存 key
         photo.setLat(spot.getLat());
         photo.setLng(spot.getLng());
         photo.setDescription(description);
@@ -109,9 +109,11 @@ public class PhotoServiceImpl implements PhotoService {
         update.setPhotoCount(spot.getPhotoCount() == null ? 1 : spot.getPhotoCount() + 1);
         spotMapper.updateById(update);
 
-        log.info("[create][id={} spotId={} userId={}] 照片创建 url={}",
-                photo.getId(), spotId, userId, fileUrl);
-        return BeanUtils.toBean(photo, PhotoRespVO.class);
+        log.info("[create][id={} spotId={} userId={}] 照片创建 key={}",
+                photo.getId(), spotId, userId, objectKey);
+        PhotoRespVO vo = BeanUtils.toBean(photo, PhotoRespVO.class);
+        signUrls(vo);
+        return vo;
     }
 
     @Override
@@ -123,6 +125,8 @@ public class PhotoServiceImpl implements PhotoService {
         }
         // 逻辑删除照片
         photoMapper.deleteById(id);
+        // 物理删除 OSS 文件（失败仅告警，不阻断删除流程）
+        ossClient.delete(photo.getUrl());
 
         // 更新点位 photo_count
         SpotDO spot = spotMapper.selectById(photo.getSpotId());
@@ -136,28 +140,23 @@ public class PhotoServiceImpl implements PhotoService {
         log.info("[delete][id={} spotId={}] 照片已删除", id, photo.getSpotId());
     }
 
-    /** 将上传文件持久化到本地 uploads 目录，返回可访问的 URL 路径 */
-    private String saveFile(MultipartFile file, Long spotId, Long userId) {
-        try {
-            // 目录：uploads/photos/{spotId}/
-            Path dir = Paths.get(uploadPath, "photos", String.valueOf(spotId));
-            Files.createDirectories(dir);
-
-            // 文件名：{timestamp}_{uuid}.{ext}
-            String origName = file.getOriginalFilename();
-            String ext = "";
-            if (origName != null && origName.contains(".")) {
-                ext = origName.substring(origName.lastIndexOf('.'));
-            }
-            String fileName = System.currentTimeMillis() + "_" + UUID.randomUUID().toString().substring(0, 8) + ext;
-            Path target = dir.resolve(fileName);
-
-            file.transferTo(target.toFile());
-            // 返回相对路径，前端拼接 BASE_URL 或通过 /uploads/** 访问
-            return "/uploads/photos/" + spotId + "/" + fileName;
-        } catch (IOException e) {
-            log.error("[saveFile][spotId={}] 文件保存失败", spotId, e);
-            throw exception(PHOTO_UPLOAD_FAIL);
+    /** 构造 OSS object key：photos/{spotId}/{timestamp}_{uuid8}.{ext} */
+    private String buildObjectKey(MultipartFile file, Long spotId) {
+        String origName = file.getOriginalFilename();
+        String ext = "";
+        if (origName != null && origName.contains(".")) {
+            ext = origName.substring(origName.lastIndexOf('.'));
         }
+        return "photos/" + spotId + "/" + System.currentTimeMillis() + "_"
+                + UUID.randomUUID().toString().substring(0, 8) + ext;
+    }
+
+    /** 将 RespVO 中的 OSS object key 转为临时签名 URL（私有 bucket 读访问）。 */
+    private void signUrls(PhotoRespVO vo) {
+        if (vo == null) {
+            return;
+        }
+        vo.setUrl(ossClient.signedUrl(vo.getUrl()));
+        vo.setThumbUrl(ossClient.signedUrl(vo.getThumbUrl()));
     }
 }
