@@ -30,16 +30,14 @@ import static org.lxp.mapalbum.framework.common.exception.ServiceExceptionUtil.e
  * <p>SSO 式登录：查 ssoUserId + ssoProvider → 有则校验状态与密码，无则注册；
  * 登录成功后签发令牌（Redis 30 天滑动过期）。禁用用户拒绝登录。
  *
- * <p>密码策略：app 通道（ssoUserId 前缀 app-）必须密码，SHA-256 摘要存储（盐 = ssoUserId）；
- * dev 测试通道（前缀 dev-）免密；老 app 账号密码为空时，首次登录所填密码即初始密码。
+ * <p>密码策略：全账号必须密码，SHA-256 摘要存储（盐 = ssoUserId）；
+ * 历史无密码的老账号，首次登录所填密码即初始密码。
  *
  * @author lxp
  */
 @Slf4j
 @Service
 public class UserServiceImpl implements UserService {
-
-    private static final String APP_CHANNEL_PREFIX = "app-";
 
     @Resource
     private UserMapper userMapper;
@@ -99,12 +97,9 @@ public class UserServiceImpl implements UserService {
     }
 
     /**
-     * app 通道密码校验：密码为空的老账号首次登录即设置密码；已设置则必须匹配。
+     * 密码校验：无密码的老账号首次登录即设置密码；已设置则必须匹配。
      */
     private void validatePassword(UserDO user, UserLoginReqVO reqVO) {
-        if (!isAppChannel(user.getSsoUserId())) {
-            return; // dev 测试通道免密
-        }
         String raw = reqVO.getPassword() == null ? "" : reqVO.getPassword().trim();
         if (user.getPassword() == null || user.getPassword().isEmpty()) {
             // 老账号补设密码
@@ -125,32 +120,24 @@ public class UserServiceImpl implements UserService {
     }
 
     /**
-     * 首次登录注册：仅写 SSO 标识 + 初始资料，昵称头像由 SSO 侧同步。
+     * 首次登录注册：写 SSO 标识 + 初始资料 + 初始密码（≥6 位）。
      */
     private UserDO doRegister(UserLoginReqVO reqVO) {
-        if (isAppChannel(reqVO.getSsoUserId())) {
-            String raw = reqVO.getPassword() == null ? "" : reqVO.getPassword().trim();
-            if (raw.isEmpty()) {
-                throw exception(USER_PASSWORD_REQUIRED);
-            }
-            checkPasswordLength(raw);
+        String raw = reqVO.getPassword() == null ? "" : reqVO.getPassword().trim();
+        if (raw.isEmpty()) {
+            throw exception(USER_PASSWORD_REQUIRED);
         }
+        checkPasswordLength(raw);
         UserDO newUser = new UserDO();
         newUser.setSsoUserId(reqVO.getSsoUserId());
         newUser.setSsoProvider(reqVO.getSsoProvider());
         newUser.setNickname(reqVO.getNickname());
         newUser.setAvatarUrl(reqVO.getAvatarUrl());
-        if (isAppChannel(reqVO.getSsoUserId())) {
-            newUser.setPassword(hash(reqVO.getPassword().trim(), reqVO.getSsoUserId()));
-        }
+        newUser.setPassword(hash(reqVO.getPassword().trim(), reqVO.getSsoUserId()));
         newUser.setGender(0);
         newUser.setStatus(CommonStatusEnum.ENABLED.getCode());
         userMapper.insert(newUser);
         return newUser;
-    }
-
-    private boolean isAppChannel(String ssoUserId) {
-        return ssoUserId != null && ssoUserId.startsWith(APP_CHANNEL_PREFIX);
     }
 
     private void checkPasswordLength(String raw) {

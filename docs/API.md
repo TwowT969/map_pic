@@ -8,7 +8,7 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/user/login` | 登录/注册。入参 `{ ssoUserId, nickname?, password? }`。`app-` 前缀账号必须密码：首次登录设置密码，之后校验；`dev-` 前缀免密。返回 `{ token, user }` |
+| POST | `/api/user/login` | 登录/注册。入参 `{ ssoUserId, nickname?, password? }`。**全账号必须密码**：首次登录设置密码（≥6 位），之后校验；历史无密码老账号首次登录所填密码即被设置。返回 `{ token, user }` |
 | PUT | `/api/user/profile` | 更新昵称。入参 `{ nickname }`，返回更新后用户 |
 
 **登录错误码**：`1005` 请输入密码；`1006` 账号或密码不正确；`1007` 密码至少 6 位。

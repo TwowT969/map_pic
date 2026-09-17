@@ -139,6 +139,7 @@ cd android && ./gradlew assembleDebug
 
 ## 版本历史
 
+- **v1.1.1**（versionCode 3）：登录全面改版 —— 移除免密通道（全账号必须密码）、登录页重设计（加载动画/密码可见切换/错误提示）
 - **v1.1.0**（versionCode 2）：P0+P1 补全 —— 上传可靠性、相册时间轴、我的页、密码登录、隐私合规、光箱手势、应用内更新、HTTPS。详见 [docs/CHANGELOG.md](docs/CHANGELOG.md)
 - **v1.0**（versionCode 1）：地图主页、拍照/相册上传、选点面板、缩略图聚合标记、详情弹窗、照片备注、长按拖动改位
 

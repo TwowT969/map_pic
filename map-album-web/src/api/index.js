@@ -59,8 +59,7 @@ export function fileUrl(url) {
 }
 
 // ===== 登录态管理 =====
-// 网页端（H5 测试）：设备级 dev 自动登录（免密 dev 通道），直接放行
-// 原生端（APK）：账号 + 密码显式登录（首次注册即设置密码，≥6 位）
+// 全端统一：账号 + 密码显式登录（首次注册即设置密码，≥6 位），无免密通道
 const TOKEN_KEY = 'map_album_token'
 const SSO_KEY = 'map_album_sso_user_id'
 const NAME_KEY = 'map_album_nickname'
@@ -77,7 +76,7 @@ function isNative() { return hasCapacitor() }
 /** 本地是否已有登录令牌（同步判断，用于决定是否显示登录门） */
 export function hasToken() { return !!getToken() }
 
-/** 注册"需要登录"回调（原生端令牌缺失/过期时触发，用于弹出登录门） */
+/** 注册"需要登录"回调（令牌缺失/过期时触发，用于弹出登录门） */
 export function setNeedLoginListener(cb) { needLoginListener = cb }
 
 function needLoginError() {
@@ -89,30 +88,13 @@ function needLoginError() {
 function notifyNeedLogin() {
   currentUserId = null
   loginPromise = null
-  if (isNative() && needLoginListener) needLoginListener()
-}
-
-/** 网页端 dev 登录：设备侧生成固定 ssoUserId，首次自动注册（dev 通道免密） */
-async function devLogin() {
-  let ssoUserId = localStorage.getItem(SSO_KEY)
-  if (!ssoUserId) {
-    ssoUserId = 'dev-' + Math.random().toString(36).slice(2, 10)
-    localStorage.setItem(SSO_KEY, ssoUserId)
-  }
-  const data = await rawPost('/user/login', {
-    ssoProvider: 'dev',
-    ssoUserId: ssoUserId,
-    nickname: '测试用户'
-  })
-  localStorage.setItem(TOKEN_KEY, data.token)
-  currentUserId = data.user.id
-  return currentUserId
+  if (needLoginListener) needLoginListener()
 }
 
 /**
- * 账号登录/注册（原生端登录门调用）：账号 + 密码（≥6 位）+ 昵称。
- * ssoUserId 加 app- 前缀与网页 dev- 账号隔离；新账号自动注册（密码即初始密码），
- * 老账号若历史无密码，本次所填密码即被设置。
+ * 账号登录/注册（登录门调用）：账号 + 密码（≥6 位）+ 昵称。
+ * ssoUserId 统一加 app- 前缀；新账号自动注册（密码即初始密码），
+ * 老账号若历史无密码，本次所填密码即被设置。同一账号在 App 与网页通用。
  */
 export async function loginAccount(account, nickname, password) {
   const acc = (account || '').trim()
@@ -141,17 +123,12 @@ export async function loginAccount(account, nickname, password) {
 export function getCurrentNickname() { return currentNickname }
 
 /**
- * 确保已登录（幂等）。
- * 网页端：自动 dev 登录；原生端：必须先经登录门 loginAccount()，否则抛 needLogin 错误。
+ * 确保已登录（幂等）。未登录时触发登录门并抛 needLogin 错误，由登录页完成 loginAccount()。
  */
 export function ensureLogin() {
   if (currentUserId) return Promise.resolve(currentUserId)
-  if (isNative()) {
-    notifyNeedLogin()
-    return Promise.reject(needLoginError())
-  }
-  if (!loginPromise) loginPromise = devLogin().catch((e) => { loginPromise = null; throw e })
-  return loginPromise
+  notifyNeedLogin()
+  return Promise.reject(needLoginError())
 }
 
 /** 当前登录用户 ID（未登录返回 null） */
@@ -197,7 +174,7 @@ async function requestOnce(url, options = {}) {
     localStorage.removeItem(TOKEN_KEY)
     currentUserId = null
     loginPromise = null
-    if (isNative() && needLoginListener) needLoginListener()
+    if (needLoginListener) needLoginListener()
     const e = new Error(data.msg || '登录已过期')
     e.needLogin = true
     throw e

@@ -182,8 +182,8 @@ function onPrivacyAgree() {
   checkUpdate(false)
 }
 
-// ===== 登录门（APK 原生端必须登录/注册；网页 H5 测试免登录直通） =====
-const needLogin = ref(hasCapacitor() && !hasToken())
+// ===== 登录门（全端统一：账号 + 密码登录/注册） =====
+const needLogin = ref(!hasToken())
 setNeedLoginListener(() => { needLogin.value = true })
 
 async function onLoggedIn() {
@@ -425,7 +425,7 @@ async function onMapReady(containerId) {
       console.log('[App] 数据加载完成，共 ' + spotsStore.spots.value.length + ' 个点位')
     } catch (e) {
       console.error('[App] 加载数据失败:', e)
-      if (e && e.needLogin) return // 原生端未登录：等待登录门，登录后补建
+      if (e && e.needLogin) return // 未登录：等待登录门，登录后补建
       showToast('加载数据失败: ' + e.message, 'error')
     }
   } catch (e) {
