@@ -1,3 +1,5 @@
+import { fileUrl } from '../api/index.js'
+
 // 构建自定义 Marker 的 HTMLElement
 // createMarkerElement：详情视图（>=14 级）—— 照片缩略图 + 圆点 + 名称
 // createSimpleMarkerElement：远视图（<14 级）—— 纯图标 + 照片数，不加载任何图片
@@ -11,7 +13,7 @@ export function createMarkerElement(spot, photo) {
 
   if (photo && (photo.thumbUrl || photo.url)) {
     const img = document.createElement('img')
-    img.src = photoUrl(photo.thumbUrl || photo.url)
+    img.src = fileUrl(photo.thumbUrl || photo.url)
     img.style.cssText = 'width:100%;height:100%;object-fit:cover'
     img.onerror = () => {
       img.style.display = 'none'
@@ -63,13 +65,6 @@ export function createSimpleMarkerElement(spot, photoCount) {
   wrapper.appendChild(label)
 
   return wrapper
-}
-
-function photoUrl(url) {
-  if (!url) return ''
-  if (url.startsWith('http')) return url
-  // 后端 context-path=/api，/uploads/** 实际服务于 /api/uploads/**
-  return '/api' + url
 }
 
 // 动态注入 marker 样式（一次性）

@@ -56,6 +56,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { fileUrl } from '../api/index.js'
 
 const props = defineProps({
   photos: { type: Array, default: () => [] },   // [{ url, thumbUrl }] 或字符串数组
@@ -70,15 +71,15 @@ const wrapper = ref(null)
 const currentSrc = computed(() => {
   const photo = props.photos[props.index]
   if (!photo) return ''
-  if (typeof photo === 'string') return photo
-  return photo.url || photo.thumbUrl || ''
+  if (typeof photo === 'string') return fileUrl(photo)
+  return fileUrl(photo.url || photo.thumbUrl || '')
 })
 
 // 缩略图 URL
 function thumbnailOf(photo) {
   if (!photo) return ''
-  if (typeof photo === 'string') return photo
-  return photo.thumbUrl || photo.url || ''
+  if (typeof photo === 'string') return fileUrl(photo)
+  return fileUrl(photo.thumbUrl || photo.url || '')
 }
 
 const total = computed(() => props.photos.length)

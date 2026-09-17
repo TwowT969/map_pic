@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import { fetchAllPhotos, fetchPhotosBySpot, uploadPhoto as apiUpload, deletePhoto as apiDelete } from '../api/index.js'
+import { fetchAllPhotos, fetchPhotosBySpot, uploadPhoto as apiUpload, deletePhoto as apiDelete, fileUrl } from '../api/index.js'
 
 export function usePhotos() {
   const photosBySpot = ref({})  // { spotId: Photo[] }
@@ -68,11 +68,7 @@ export function usePhotos() {
   }
 
   function photoUrl(url) {
-    if (!url) return ''
-    if (url.startsWith('http')) return url
-    // 后端 context-path=/api，资源映射 /uploads/** 实际服务于 /api/uploads/**
-    // 加 /api 前缀走 Vite proxy -> http://localhost:48081/api/uploads/...
-    return '/api' + url
+    return fileUrl(url)
   }
 
   return {

@@ -1,7 +1,14 @@
 // API 基础配置
 // 浏览器开发：未设 VITE_API_BASE 时回退 /api，走 vite.config.js 的 proxy -> localhost:48081
 // APK 打包：构建时注入 VITE_API_BASE=http://<服务器IP>/api（见 .env.production.example）
-const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+export const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+
+/** 把后端相对资源路径(/uploads/...)转为可直接访问 URL；WebView(APK)内必须绝对地址 */
+export function fileUrl(url) {
+  if (!url) return ''
+  if (url.startsWith('http')) return url
+  return API_BASE + url
+}
 
 import { hasCapacitor } from '../utils/capacitor.js'
 
