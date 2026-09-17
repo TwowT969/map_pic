@@ -14,19 +14,19 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         // WebView 在 BridgeActivity.onCreate 后初始化，配置在 onStart 中完成
     }
 
     @Override
-    protected void onStart() {
+    public void onStart() {
         super.onStart();
         configureWebView();
     }
 
     @Override
-    protected void onResume() {
+    public void onResume() {
         super.onResume();
         // onResume 时再确认一次（从后台恢复时状态可能丢失）
         configureWebView();
@@ -44,10 +44,8 @@ public class MainActivity extends BridgeActivity {
         settings.setGeolocationDatabasePath(getFilesDir().getPath());
         // DOM Storage（高德缓存地图瓦片）
         settings.setDomStorageEnabled(true);
-        // 应用缓存数据库
+        // 应用缓存数据库（AppCache API 已在 Android 9+ 移除，DomStorage + Database 已覆盖）
         settings.setDatabaseEnabled(true);
-        settings.setAppCacheEnabled(true);
-        settings.setAppCachePath(getCacheDir().getPath());
         // 文件访问（Capacitor 从 assets 加载本地文件）
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
