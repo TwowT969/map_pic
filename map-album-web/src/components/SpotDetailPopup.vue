@@ -1,7 +1,12 @@
 <template>
   <div class="sdp-mask" @click.self="$emit('close')">
-    <div class="sdp-card">
-      <div class="sdp-header">
+    <div class="sdp-card" ref="cardEl">
+      <div
+        class="sdp-header"
+        @touchstart.passive="onDragStart"
+        @touchmove.passive="onDragMove"
+        @touchend.passive="onDragEnd"
+      >
         <span class="sdp-type">点位</span>
         <span class="sdp-name" :title="spot?.name">{{ spot?.name || '未命名点位' }}</span>
         <button class="sdp-icon-btn" title="管理点位" @click="$emit('manage')">✎</button>
@@ -31,7 +36,7 @@
 </template>
 
 <script setup>
-import { computed, inject } from 'vue'
+import { computed, inject, ref } from 'vue'
 import { fileUrl } from '../api/index.js'
 
 const props = defineProps({
@@ -50,9 +55,44 @@ const tagList = computed(() =>
 function imgOf(p) { return fileUrl(p.thumbUrl || p.url) }
 function onImgError(e) { e.target.style.display = 'none' }
 
-/** 点击图片 → 大图浏览（可左右滑动，当前点位照片集合） */
+/** 点击图片 → 大图浏览（可缩放、改备注、删除） */
 function openPhoto(i) {
   if (openLightbox) openLightbox(props.photos, i)
+}
+
+// ===== 下拉关闭（头部区域拖拽） =====
+const cardEl = ref(null)
+let dragStartY = 0
+let dragging = false
+let dy = 0
+
+function onDragStart(e) {
+  dragging = true
+  dragStartY = e.touches[0].clientY
+  dy = 0
+}
+
+function onDragMove(e) {
+  if (!dragging) return
+  dy = e.touches[0].clientY - dragStartY
+  if (dy > 0 && cardEl.value) {
+    cardEl.value.style.transition = 'none'
+    cardEl.value.style.transform = `translateY(${dy}px)`
+  }
+}
+
+function onDragEnd() {
+  if (!dragging) return
+  dragging = false
+  if (dy > 90) {
+    emit('close')
+    if (cardEl.value) { cardEl.value.style.transform = '' }
+  } else if (cardEl.value && dy > 0) {
+    cardEl.value.style.transition = 'transform 0.25s ease'
+    cardEl.value.style.transform = ''
+    setTimeout(() => { if (cardEl.value) cardEl.value.style.transition = '' }, 260)
+  }
+  dy = 0
 }
 </script>
 
@@ -81,6 +121,8 @@ function openPhoto(i) {
   display: flex; align-items: center; gap: 8px;
   padding: 14px 16px 10px;
   flex-shrink: 0;
+  touch-action: none; /* 头部接管下拉手势 */
+  cursor: grab;
 }
 .sdp-type {
   flex-shrink: 0;

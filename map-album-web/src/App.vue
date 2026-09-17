@@ -1,85 +1,159 @@
 <template>
   <div class="app-root" :class="{ mobile: isMobile }">
-    <SearchBar @select="onSearchSelect" />
-    <MapContainer
-      @map-ready="onMapReady"
-      @spot-click="onSpotClick"
-    />
+    <!-- 隐私合规（原生端首次启动必须先同意） -->
+    <PrivacyConsent v-if="!privacyReady" @agree="onPrivacyAgree" />
 
-    <!-- 底部中间蓝色加号：上传入口 -->
-    <button class="upload-fab" @click.stop="sheetOpen = true" aria-label="上传照片">＋</button>
+    <template v-if="privacyReady">
+      <!-- 地图视图 -->
+      <SearchBar
+        v-show="activeView === 'map'"
+        @select="onSearchSelect"
+        @select-own-spot="onSearchOwnSpot"
+        @select-own-photo="onSearchOwnPhoto"
+      />
+      <div v-show="activeView === 'map'" class="map-host">
+        <MapContainer @map-ready="onMapReady" @spot-click="onSpotClick" />
+      </div>
 
-    <!-- 上传方式选择：拍照 / 从相册选择 -->
-    <Transition name="fade">
-      <div v-if="sheetOpen" class="sheet-mask" @click="sheetOpen = false"></div>
-    </Transition>
-    <div class="action-sheet" :class="{ open: sheetOpen }">
-      <button class="sheet-item" @click="onTakePhoto">📷 拍照</button>
-      <button class="sheet-item" @click="onPickGallery">🖼️ 从相册选择</button>
-      <button class="sheet-item cancel" @click="sheetOpen = false">取消</button>
-    </div>
+      <!-- 相册视图（时间轴） -->
+      <AlbumView v-if="activeView === 'album'" @back="switchView('map')" />
+      <!-- 我的视图 -->
+      <ProfileView
+        v-if="activeView === 'profile'"
+        :pending-count="pendingCount"
+        @back="switchView('map')"
+        @check-update="checkUpdate(true)"
+      />
 
-    <!-- 上传选点面板（底部滑出，地图保持可操作） -->
-    <UploadPickPanel
-      v-if="pickVisible && currentFile"
-      :key="uploadSeq"
-      :preview-url="previewUrl"
-      :coord="pickCoord"
-      :busy="pickBusy"
-      @confirm="onUploadConfirm"
-      @cancel="onUploadCancel"
-    />
+      <!-- 视图切换（地图视图左下角） -->
+      <div class="view-switcher" v-if="activeView === 'map'">
+        <button title="相册" @click="switchView('album')">🖼️</button>
+        <button title="我的" @click="switchView('profile')">👤</button>
+      </div>
 
-    <!-- 点位详情弹窗：图片列表 + 一一对应备注 + 图片/点位标签 -->
-    <SpotDetailPopup
-      v-if="popupSpot"
-      :spot="popupSpot"
-      :photos="popupPhotos"
-      @close="popupSpot = null"
-      @manage="onManageSpot"
-    />
+      <!-- 离线横幅 -->
+      <div class="offline-banner" v-if="isOffline && activeView === 'map'">
+        📴 当前无网络，拍摄的照片将自动保存待传
+      </div>
 
-    <!-- 点位管理面板 -->
-    <SpotPanel
-      v-if="panelVisible"
-      :spot="currentSpot"
-      :photos="currentPhotos"
-      :is-creating="isCreating"
-      :initial-coord="createCoord"
-      :auto-edit="autoEdit"
-      @close="closePanel"
-      @created="onSpotCreated"
-      @updated="onSpotUpdated"
-      @deleted="onSpotDeleted"
-      @upload="onPhotoUpload"
-      @delete-photo="onPhotoDelete"
-      @preview-photo="onPreviewPhoto"
-    />
+      <!-- 待上传横幅 -->
+      <div
+        class="pending-banner"
+        v-if="pendingCount > 0 && activeView === 'map' && !pickVisible && !pickBusy"
+        @click="resumePending"
+      >
+        <span>⏳ {{ pendingCount }} 张照片待上传</span>
+        <b>{{ resuming ? '上传中…' : '立即上传' }}</b>
+      </div>
 
-    <!-- 光箱（照片大图浏览，支持连续翻页） -->
-    <PhotoLightbox
-      :photos="lightboxPhotos"
-      v-model:index="lightboxIndex"
-      :visible="lightboxVisible"
-      @close="lightboxVisible = false"
-    />
+      <!-- 底部中间蓝色加号：上传入口 -->
+      <button class="upload-fab" v-if="activeView === 'map'" @click.stop="sheetOpen = true" aria-label="上传照片">＋</button>
+
+      <!-- 分享海报入口 -->
+      <button class="poster-fab" v-if="activeView === 'map'" @click="openPoster" aria-label="生成分享海报">🖼️</button>
+
+      <!-- 上传方式选择：拍照 / 从相册选择 -->
+      <Transition name="fade">
+        <div v-if="sheetOpen" class="sheet-mask" @click="sheetOpen = false"></div>
+      </Transition>
+      <div class="action-sheet" :class="{ open: sheetOpen }">
+        <button class="sheet-item" @click="onTakePhoto">📷 拍照</button>
+        <button class="sheet-item" @click="onPickGallery">🖼️ 从相册选择</button>
+        <button class="sheet-item cancel" @click="sheetOpen = false">取消</button>
+      </div>
+
+      <!-- 更新弹窗 -->
+      <div class="upd-mask" v-if="updateInfo" @click.self="updateInfo = null">
+        <div class="upd-card">
+          <div class="upd-title">发现新版本 v{{ updateInfo.versionName }}</div>
+          <div class="upd-notes" v-if="updateInfo.notes">{{ updateInfo.notes }}</div>
+          <div class="upd-actions">
+            <button class="upd-btn ghost" @click="updateInfo = null">稍后</button>
+            <button class="upd-btn primary" @click="goUpdate">立即更新</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 上传选点面板（底部滑出，地图保持可操作） -->
+      <UploadPickPanel
+        v-if="pickVisible && currentFile"
+        :key="uploadSeq"
+        :preview-url="previewUrl"
+        :coord="pickCoord"
+        :busy="pickBusy"
+        @confirm="onUploadConfirm"
+        @cancel="onUploadCancel"
+      />
+
+      <!-- 点位详情弹窗：图片列表 + 一一对应备注 + 图片/点位标签 -->
+      <SpotDetailPopup
+        v-if="popupSpot"
+        :spot="popupSpot"
+        :photos="popupPhotos"
+        @close="popupSpot = null"
+        @manage="onManageSpot"
+      />
+
+      <!-- 点位管理面板 -->
+      <SpotPanel
+        v-if="panelVisible"
+        :spot="currentSpot"
+        :photos="currentPhotos"
+        :is-creating="isCreating"
+        :initial-coord="createCoord"
+        :auto-edit="autoEdit"
+        @close="closePanel"
+        @created="onSpotCreated"
+        @updated="onSpotUpdated"
+        @deleted="onSpotDeleted"
+        @upload="onPhotoUpload"
+        @delete-photo="onPhotoDelete"
+        @preview-photo="onPreviewPhoto"
+      />
+
+      <!-- 光箱（大图浏览：缩放手势 + 备注编辑/删除） -->
+      <PhotoLightbox
+        :photos="lightboxPhotos"
+        v-model:index="lightboxIndex"
+        :visible="lightboxVisible"
+        editable
+        @close="lightboxVisible = false"
+        @save-desc="onSavePhotoDesc"
+        @delete-photo="onDeletePhoto"
+      />
+      <!-- 分享海报弹窗 -->
+    <PosterModal v-if="posterVisible" @close="posterVisible = false" />
+
     <ToastMessage />
-    <UserLogin v-if="needLogin" @logged-in="onLoggedIn" />
+      <UserLogin v-if="needLogin" @logged-in="onLoggedIn" />
+    </template>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, provide, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, provide, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import exifr from 'exifr'
-import { uploadPhoto, hasToken, setNeedLoginListener, fetchIpLocation } from './api/index.js'
+import {
+  uploadPhoto, hasToken, setNeedLoginListener, fetchIpLocation,
+  fetchAppVersion, getCurrentNickname
+} from './api/index.js'
 import { wgs84ToGcj02 } from './utils/coord.js'
-import { hasCapacitor, takePhoto, pickFromGallery, getCurrentPosition } from './utils/capacitor.js'
+import {
+  hasCapacitor, takePhoto, pickFromGallery, getCurrentPosition,
+  requestLocationPermission, compressImage, onNetworkChange
+} from './utils/capacitor.js'
+import { addPending, listPending, removePending, countPending } from './utils/pendingQueue.js'
+import { track, reportError, flush, installGlobalErrorHandlers } from './utils/applog.js'
 import SearchBar from './components/SearchBar.vue'
 import MapContainer from './components/MapContainer.vue'
 import SpotPanel from './components/SpotPanel.vue'
 import PhotoLightbox from './components/PhotoLightbox.vue'
 import UploadPickPanel from './components/UploadPickPanel.vue'
 import SpotDetailPopup from './components/SpotDetailPopup.vue'
+import PosterModal from './components/PosterModal.vue'
+import AlbumView from './components/AlbumView.vue'
+import ProfileView from './components/ProfileView.vue'
+import PrivacyConsent from './components/PrivacyConsent.vue'
 import ToastMessage from './components/ToastMessage.vue'
 import UserLogin from './components/UserLogin.vue'
 import { useAmap } from './composables/useAmap.js'
@@ -90,11 +164,23 @@ import { injectMarkerStyles } from './utils/marker.js'
 
 // 初始化
 injectMarkerStyles()
+installGlobalErrorHandlers()
 
 const { map, initMap, getAMap, createGeocoder } = useAmap()
 const spotsStore = useSpots()
 const photosStore = usePhotos()
 const { toastState, showToast } = useToast()
+
+// ===== 隐私合规（原生端首次启动门） =====
+const PRIVACY_KEY = 'map_album_privacy_consent_v1'
+const privacyReady = ref(!hasCapacitor() || !!localStorage.getItem(PRIVACY_KEY))
+
+function onPrivacyAgree() {
+  localStorage.setItem(PRIVACY_KEY, '1')
+  privacyReady.value = true
+  track('consent', 'agree')
+  checkUpdate(false)
+}
 
 // ===== 登录门（APK 原生端必须登录/注册；网页 H5 测试免登录直通） =====
 const needLogin = ref(hasCapacitor() && !hasToken())
@@ -102,10 +188,16 @@ setNeedLoginListener(() => { needLogin.value = true })
 
 async function onLoggedIn() {
   needLogin.value = false
+  try { await flush() } catch (e) { /* ignore */ }
   try {
-    await spotsStore.loadSpots()
-    await photosStore.loadAllPhotos()
-    spotsStore.renderAllMarkers()
+    if (!map.value) {
+      // 登录前地图初始化因未登录被中断 → 重新初始化
+      await onMapReady('amap-container')
+    } else {
+      await spotsStore.loadSpots()
+      await photosStore.loadAllPhotos()
+      spotsStore.renderAllMarkers()
+    }
     console.log('[App] 登录后数据加载完成')
   } catch (e) {
     console.error('[App] 登录后加载数据失败:', e)
@@ -121,6 +213,18 @@ function detectMobile() {
 onMounted(() => { detectMobile(); window.addEventListener('resize', detectMobile) })
 onBeforeUnmount(() => window.removeEventListener('resize', detectMobile))
 
+// ===== 视图切换（地图 / 相册 / 我的） =====
+const activeView = ref('map')
+
+function switchView(v) {
+  if (activeView.value === v) return
+  activeView.value = v
+  track('view_switch', v)
+  if (v === 'map') {
+    nextTick(() => { if (map.value && map.value.resize) map.value.resize() })
+  }
+}
+
 // ===== 面板状态 =====
 const panelVisible = ref(false)
 const isCreating = ref(false)
@@ -130,7 +234,7 @@ const autoEdit = ref(false)
 
 // ===== 光箱状态 =====
 const lightboxVisible = ref(false)
-const lightboxPhotos = ref([])   // [{ url, thumbUrl }, ...]
+const lightboxPhotos = ref([])
 const lightboxIndex = ref(0)
 
 // ===== 点位详情弹窗状态 =====
@@ -153,7 +257,6 @@ provide('showToast', showToast)
 provide('toastState', toastState)
 provide('spotsStore', spotsStore)
 provide('photosStore', photosStore)
-// 光箱：通过 provide 让 PhotoGrid / SpotDetailPopup 打开大图浏览
 provide('openLightbox', (photos, idx) => {
   lightboxPhotos.value = photos || []
   lightboxIndex.value = idx || 0
@@ -186,14 +289,12 @@ function withTimeout(promise, ms) {
 }
 
 async function locateChain(m) {
-  // 1) 请求用户位置权限定位（原生 Capacitor GPS / 浏览器定位）
+  // 1) 请求用户位置权限定位（先说明用途，再触发系统权限弹窗）
   try {
     showToast('正在获取定位…')
     if (hasCapacitor()) {
-      try {
-        const { Geolocation } = await import('@capacitor/geolocation')
-        await Geolocation.requestPermissions(['location', 'coarseLocation'])
-      } catch (e) { /* 权限请求失败则直接尝试定位 */ }
+      showToast('需要定位权限，用于地图定位与记录照片位置')
+      await requestLocationPermission()
     }
     const pos = await withTimeout(getCurrentPosition(), 12000)
     const gcj = wgs84ToGcj02({ lng: pos.lng, lat: pos.lat })
@@ -206,7 +307,7 @@ async function locateChain(m) {
     console.warn('[App] 权限定位失败，尝试历史定位:', e?.message || e)
   }
 
-  // 2) 历史定位（上次成功定位缓存，创建地图时已应用，这里确保中心一致）
+  // 2) 历史定位（上次成功定位缓存，创建地图时已应用）
   const hist = readHistory()
   if (hist) {
     m.setCenter([hist.lng, hist.lat])
@@ -225,14 +326,13 @@ async function locateChain(m) {
     return
   } catch (e) { /* ignore */ }
 
-  // 4) 默认：苏州（创建地图时已应用）
+  // 4) 默认：苏州
   showToast('默认定位：苏州')
 }
 
 // ===== 地图就绪 =====
 async function onMapReady(containerId) {
   try {
-    // 初始中心：历史定位 → 苏州（定位链稍后继续）
     const hist = readHistory()
     const initOpts = hist
       ? { center: [hist.lng, hist.lat], zoom: 14 }
@@ -265,7 +365,6 @@ async function onMapReady(containerId) {
       autoEdit.value = false
       panelVisible.value = true
 
-      // 后台逆地理编码
       try {
         const geocoder = await createGeocoder()
         geocoder.getAddress([coord.lng, coord.lat], (status, result) => {
@@ -282,7 +381,7 @@ async function onMapReady(containerId) {
       } catch (err) { console.warn('[App] 逆地理编码失败:', err) }
     })
 
-    // --- 右键（PC）：选点模式移动标记 / 进入创建模式 ---
+    // --- 右键（PC） ---
     m.on('rightclick', (e) => {
       if (spotsStore.isPicking.value) {
         if (e && e.lnglat) spotsStore.movePickMarker(e.lnglat)
@@ -291,13 +390,12 @@ async function onMapReady(containerId) {
       startCreateMode()
     })
 
-    // 移动端：长按地图 → 选点模式移动标记 / 进入创建模式
+    // --- 移动端长按地图 ---
     if (isMobile.value) {
       let longPressTimer = null
       const mapContainer = document.getElementById('amap-container')
       if (mapContainer) {
         mapContainer.addEventListener('touchstart', (e) => {
-          // 多指不触发；触点在标记上不触发（标记有自己的长按拖动）
           if (e.touches.length > 1) return
           const target = e.target
           if (target && target.closest && target.closest('.custom-marker, .pick-marker')) return
@@ -316,7 +414,7 @@ async function onMapReady(containerId) {
       }
     }
 
-    // --- 定位链：权限定位 → 历史定位 → IP → 苏州 ---
+    // --- 定位链 ---
     locateChain(m)
 
     // --- 加载数据 ---
@@ -327,16 +425,18 @@ async function onMapReady(containerId) {
       console.log('[App] 数据加载完成，共 ' + spotsStore.spots.value.length + ' 个点位')
     } catch (e) {
       console.error('[App] 加载数据失败:', e)
-      if (e && e.needLogin) return // 原生端未登录：等待登录门，登录后重载
+      if (e && e.needLogin) return // 原生端未登录：等待登录门，登录后补建
       showToast('加载数据失败: ' + e.message, 'error')
     }
   } catch (e) {
     console.error('[App] 地图初始化失败:', e)
+    if (e && e.needLogin) return // 未登录：等登录门，登录后 onLoggedIn 重新初始化
+    reportError(e, 'map-init')
     showToast('地图初始化失败: ' + e.message, 'error')
   }
 }
 
-/** 屏幕坐标 → 地图经纬度（长按选点用） */
+/** 屏幕坐标 → 地图经纬度 */
 function clientToLngLat(clientX, clientY) {
   const m = map.value
   if (!m || typeof m.containerToLngLat !== 'function') return null
@@ -366,8 +466,40 @@ function onSearchSelect({ lng, lat, name }) {
   showToast('已定位到: ' + name)
 }
 
-// ===== 上传入口（需求2）：底部中间蓝色加号 → 拍照 / 从相册选择 =====
+function onSearchOwnSpot(spot) {
+  if (map.value) {
+    map.value.setCenter([spot.lng, spot.lat])
+    map.value.setZoom(17)
+  }
+  onMarkerClick(spot)
+}
+
+function onSearchOwnPhoto(photo) {
+  const spot = spotsStore.spots.value.find(s => s.id === photo.spotId)
+  if (!spot) { showToast('照片所属点位不存在'); return }
+  if (map.value) {
+    map.value.setCenter([spot.lng, spot.lat])
+    map.value.setZoom(17)
+  }
+  const list = photosStore.photosBySpot.value[spot.id] || []
+  const idx = list.findIndex(p => p.id === photo.id)
+  lightboxPhotos.value = list
+  lightboxIndex.value = idx >= 0 ? idx : 0
+  lightboxVisible.value = true
+}
+
+// ===== 上传入口：底部中间蓝色加号 → 拍照 / 从相册选择 =====
 const sheetOpen = ref(false)
+
+// ===== 分享海报（两种风格可选） =====
+const posterVisible = ref(false)
+function openPoster() {
+  if (!spotsStore.spots.value.length) {
+    showToast('先上传照片，生成你的第一张海报')
+    return
+  }
+  posterVisible.value = true
+}
 
 async function onTakePhoto() {
   sheetOpen.value = false
@@ -389,7 +521,7 @@ async function onPickGallery() {
   }
 }
 
-// ===== 上传选点流程（需求3/6）：选图 → 底部面板 + 蓝色可拖动标记 → 备注 → 确认上传 =====
+// ===== 上传选点流程：选图 → 底部面板 + 蓝色可拖动标记 → 备注 → 确认上传 =====
 const pickVisible = ref(false)
 const pickBusy = ref(false)
 const pickCoord = ref({ lng: 0, lat: 0, address: '', province: '', city: '', district: '' })
@@ -397,16 +529,26 @@ const currentFile = ref(null)
 const previewUrl = ref('')
 const uploadSeq = ref(0)
 let uploadQueue = []
+const currentMeta = ref({ shotTime: '', device: '' })
 
 function enqueueFiles(files) {
   uploadQueue.push(...files)
-  if (pickVisible.value && currentFile.value) return // 已在选点流程中（追加到队列）
+  if (pickVisible.value && currentFile.value) return
   nextUploadFile(false)
+}
+
+function fmtDateTime(d) {
+  if (!d) return ''
+  const t = new Date(d)
+  if (isNaN(t.getTime())) return ''
+  const p = n => String(n).padStart(2, '0')
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`
 }
 
 /**
  * 取下一张待上传照片。
- * @param {boolean} useCurrentPos true=沿用当前位置（批量连传）；false=解析 EXIF GPS / 地图中心
+ * 始终解析 EXIF 元数据（拍摄时间/设备）；仅首张（或换点）时使用 EXIF GPS 预定位。
+ * @param {boolean} useCurrentPos true=沿用当前位置（批量连传）
  */
 async function nextUploadFile(useCurrentPos) {
   const file = uploadQueue.shift()
@@ -416,14 +558,25 @@ async function nextUploadFile(useCurrentPos) {
   previewUrl.value = URL.createObjectURL(file)
   uploadSeq.value++
 
+  // EXIF 元数据（拍摄时间 / 设备 / GPS）
+  currentMeta.value = { shotTime: '', device: '' }
+  let exifGps = null
+  try {
+    const exif = await exifr.parse(file)
+    if (exif) {
+      if (exif.latitude != null && exif.longitude != null) {
+        exifGps = { lng: exif.longitude, lat: exif.latitude }
+      }
+      const dto = exif.DateTimeOriginal || exif.CreateDate
+      if (dto) currentMeta.value.shotTime = fmtDateTime(dto)
+      const dev = [exif.Make, exif.Model].filter(Boolean).join(' ').trim()
+      if (dev) currentMeta.value.device = dev.slice(0, 100)
+    }
+  } catch (e) { /* 无 EXIF，忽略 */ }
+
   let ll = null
   if (!useCurrentPos) {
-    try {
-      const gps = await exifr.parse(file, { gps: true })
-      if (gps && gps.latitude != null && gps.longitude != null) {
-        ll = wgs84ToGcj02({ lng: gps.longitude, lat: gps.latitude })
-      }
-    } catch (e) { /* 无 EXIF */ }
+    if (exifGps) ll = wgs84ToGcj02(exifGps)
     if (!ll && map.value) {
       const c = map.value.getCenter()
       ll = { lng: c.getLng(), lat: c.getLat() }
@@ -452,7 +605,7 @@ function releasePreview() {
   }
 }
 
-/** 选点变化（拖动标记 / 点击地图 / 长按地图）→ 更新面板坐标 + 防抖逆地理编码 */
+/** 选点变化 → 更新面板坐标 + 防抖逆地理编码 */
 function onPickMove(coord) {
   pickCoord.value = { ...pickCoord.value, lng: coord.lng, lat: coord.lat, address: '' }
   queueRegeo(coord)
@@ -467,7 +620,7 @@ function queueRegeo(coord) {
     try {
       const geocoder = await createGeocoder()
       geocoder.getAddress([coord.lng, coord.lat], (status, result) => {
-        if (seq !== _regeoSeq) return // 已有更新的选点，丢弃旧结果
+        if (seq !== _regeoSeq) return
         if (status === 'complete' && result.regeocode) {
           const ac = result.regeocode.addressComponent || {}
           pickCoord.value = {
@@ -483,7 +636,7 @@ function queueRegeo(coord) {
   }, 300)
 }
 
-/** 找 50m 内已有点位，没有则创建（需求4：确认上传后地图出现方形缩略图标记） */
+/** 找 50m 内已有点位，没有则创建 */
 async function ensureSpotAt(coord) {
   const near = spotsStore.spots.value.find(s =>
     Math.abs(s.lng - coord.lng) < 0.0005 && Math.abs(s.lat - coord.lat) < 0.0005
@@ -508,14 +661,17 @@ async function onUploadConfirm(description) {
   pickBusy.value = true
   try {
     const coord = { ...pickCoord.value }
+    if (isOffline.value) throw new Error('当前无网络')
     const spot = await ensureSpotAt(coord)
-    await uploadPhoto(spot.id, currentFile.value, description || '')
+    // 压缩（先解析过 EXIF 元数据，压缩丢失的 GPS/时间由参数显式携带）
+    const compressed = await compressImage(currentFile.value)
+    await uploadPhoto(spot.id, compressed, description || '', currentMeta.value.shotTime, currentMeta.value.device)
     await photosStore.loadAllPhotos()
     spotsStore.renderAllMarkers()
     showToast('上传成功', 'success')
+    track('upload_success')
 
     if (uploadQueue.length > 0) {
-      // 下一张沿用当前位置（批量连传同一地点）
       await nextUploadFile(true)
     } else {
       const s = spotsStore.spots.value.find(x => x.id === spot.id)
@@ -526,9 +682,36 @@ async function onUploadConfirm(description) {
       finishPick()
     }
   } catch (e) {
-    showToast('上传失败: ' + (e?.message || e), 'error')
+    // 失败/离线 → 持久化待上传队列（重试/断网补传）
+    let saved = false
+    try {
+      saved = await addPending({
+        id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        blob: currentFile.value,
+        name: currentFile.value.name,
+        meta: {
+          ...pickCoord.value,
+          desc: description || '',
+          shotTime: currentMeta.value.shotTime,
+          device: currentMeta.value.device
+        }
+      })
+    } catch (e2) { /* ignore */ }
+    if (saved) {
+      showToast('已保存到待上传，网络恢复后自动补传', 'success')
+      track('upload_pending', e?.message || '')
+    } else {
+      showToast('上传失败: ' + (e?.message || e), 'error')
+      track('upload_fail', e?.message || '')
+    }
+    if (uploadQueue.length > 0) {
+      await nextUploadFile(true)
+    } else {
+      finishPick()
+    }
   } finally {
     pickBusy.value = false
+    refreshPendingCount()
   }
 }
 
@@ -550,7 +733,47 @@ function finishPick() {
   uploadQueue = []
 }
 
-// ===== 点位详情弹窗（需求5）：点击缩略图标记 → 图片列表 + 一一对应备注 =====
+// ===== 待上传队列（重试/离线补传） =====
+const pendingCount = ref(0)
+const resuming = ref(false)
+const isOffline = ref(typeof navigator !== 'undefined' ? !navigator.onLine : false)
+let _resumeTimer = null
+
+async function refreshPendingCount() {
+  pendingCount.value = await countPending()
+}
+
+async function resumePending() {
+  if (resuming.value || pickBusy.value) return
+  resuming.value = true
+  try {
+    const items = await listPending()
+    let ok = 0
+    for (const item of items) {
+      if (isOffline.value) break
+      try {
+        const spot = await ensureSpotAt(item.meta)
+        const file = new File([item.blob], item.name || 'photo.jpg', { type: item.blob.type || 'image/jpeg' })
+        await uploadPhoto(spot.id, file, item.meta.desc || '', item.meta.shotTime, item.meta.device)
+        await removePending(item.id)
+        ok++
+      } catch (e) { /* 保留队列下次再试 */ }
+    }
+    if (ok > 0) {
+      await photosStore.loadAllPhotos()
+      spotsStore.renderAllMarkers()
+      showToast(`已补传 ${ok} 张照片`, 'success')
+      track('upload_resume', String(ok))
+    } else if (items.length > 0) {
+      showToast('补传未完成，稍后再试')
+    }
+  } finally {
+    resuming.value = false
+    await refreshPendingCount()
+  }
+}
+
+// ===== 点位详情弹窗 =====
 function onMarkerClick(spot) {
   if (spotsStore.isPicking.value || spotsStore.isCreating.value) return
   popupSpot.value = spot
@@ -562,16 +785,53 @@ function onMarkerClick(spot) {
 function onManageSpot() {
   const spot = popupSpot.value
   popupSpot.value = null
-  if (spot) onSpotClick(spot) // 打开点位管理面板
+  if (spot) onSpotClick(spot)
 }
 
-// ===== 长按标记拖动（需求7）：松手保存点位新位置 =====
+// ===== 光箱：备注编辑 / 删除 =====
+async function onSavePhotoDesc(photo, description) {
+  try {
+    await photosStore.updateDescription(photo.id, description)
+    lightboxPhotos.value = lightboxPhotos.value.map(p =>
+      p.id === photo.id ? { ...p, description } : p
+    )
+    showToast('备注已更新', 'success')
+    track('photo_desc_edit')
+  } catch (e) {
+    showToast('更新失败: ' + (e?.message || e), 'error')
+  }
+}
+
+async function onDeletePhoto(photo) {
+  try {
+    await photosStore.remove(photo.id, photo.spotId)
+    lightboxPhotos.value = lightboxPhotos.value.filter(p => p.id !== photo.id)
+    if (lightboxPhotos.value.length === 0) {
+      lightboxVisible.value = false
+    } else if (lightboxIndex.value >= lightboxPhotos.value.length) {
+      lightboxIndex.value = lightboxPhotos.value.length - 1
+    }
+    if (currentSpot.value && currentSpot.value.id === photo.spotId) {
+      currentSpot.value = {
+        ...currentSpot.value,
+        photoCount: Math.max(0, (currentSpot.value.photoCount || 1) - 1)
+      }
+    }
+    spotsStore.updateMarker(currentSpot.value)
+    showToast('照片已删除', 'success')
+    track('photo_delete')
+  } catch (e) {
+    showToast('删除失败: ' + (e?.message || e), 'error')
+  }
+}
+
+// ===== 长按标记拖动：松手保存新位置 =====
 async function onMarkerMoved(spot, coord) {
   try {
     const updated = await spotsStore.update({ id: spot.id, lat: coord.lat, lng: coord.lng })
     showToast('位置已保存', 'success')
+    track('spot_move')
     if (popupSpot.value && popupSpot.value.id === spot.id) popupSpot.value = updated
-    // 后台逆地理编码，静默更新地址
     try {
       const geocoder = await createGeocoder()
       geocoder.getAddress([coord.lng, coord.lat], async (status, result) => {
@@ -592,7 +852,7 @@ async function onMarkerMoved(spot, coord) {
     } catch (e) { /* ignore */ }
   } catch (e) {
     showToast('保存位置失败: ' + (e?.message || e), 'error')
-    spotsStore.renderAllMarkers() // 回弹到原位置
+    spotsStore.renderAllMarkers()
   }
 }
 
@@ -684,7 +944,6 @@ async function onPhotoDelete(photoId) {
   }
 }
 
-// 点击照片网格中的某张 → 打开光箱（当前点位照片列表）
 function onPreviewPhoto(photo) {
   const list = currentPhotos.value
   const idx = list.findIndex(p => p.id === photo.id)
@@ -693,9 +952,34 @@ function onPreviewPhoto(photo) {
   lightboxVisible.value = true
 }
 
+// ===== 应用内更新检查 =====
+const APP_VERSION_CODE = Number(import.meta.env.VITE_APP_VERSION_CODE || 1)
+const updateInfo = ref(null)
+
+async function checkUpdate(manual) {
+  try {
+    const data = await fetchAppVersion()
+    if (data && Number(data.versionCode) > APP_VERSION_CODE) {
+      updateInfo.value = data
+    } else if (manual) {
+      showToast('已是最新版本', 'success')
+    }
+  } catch (e) {
+    if (manual) showToast('检查更新失败: ' + (e?.message || e), 'error')
+  }
+}
+
+function goUpdate() {
+  if (updateInfo.value && updateInfo.value.downloadUrl) {
+    window.open(updateInfo.value.downloadUrl, '_blank')
+  }
+  updateInfo.value = null
+}
+
 // ===== 键盘快捷键 =====
 function onKeyDown(e) {
   if (e.key !== 'Escape') return
+  if (updateInfo.value) { updateInfo.value = null; e.preventDefault(); return }
   if (sheetOpen.value) { sheetOpen.value = false; e.preventDefault(); return }
   if (popupSpot.value) { popupSpot.value = null; e.preventDefault(); return }
   if (lightboxVisible.value) { lightboxVisible.value = false; e.preventDefault(); return }
@@ -708,7 +992,20 @@ function onKeyDown(e) {
   }
 }
 
-onMounted(() => document.addEventListener('keydown', onKeyDown))
+// ===== 生命周期 =====
+onMounted(() => {
+  document.addEventListener('keydown', onKeyDown)
+  track('app_open', getCurrentNickname() || '')
+  refreshPendingCount()
+  onNetworkChange((connected) => {
+    isOffline.value = !connected
+    if (connected && pendingCount.value > 0 && privacyReady.value) {
+      clearTimeout(_resumeTimer)
+      _resumeTimer = setTimeout(() => resumePending(), 2000)
+    }
+  })
+  if (hasCapacitor() && privacyReady.value) checkUpdate(false)
+})
 onBeforeUnmount(() => document.removeEventListener('keydown', onKeyDown))
 </script>
 
@@ -719,12 +1016,56 @@ html, body, #app {
   width: 100%; height: 100%;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   overflow: hidden;
-  /* 防止 iOS 橡皮筋效果导致误关闭 */
   position: fixed;
   overscroll-behavior: none;
   -webkit-overflow-scrolling: touch;
 }
 .app-root { width: 100%; height: 100%; position: relative; }
+.map-host { position: absolute; inset: 0; }
+
+/* ===== 视图切换（左下角） ===== */
+.view-switcher {
+  position: fixed;
+  left: 16px;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  z-index: 140;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.view-switcher button {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: rgba(255,255,255,0.95); border: none;
+  box-shadow: 0 3px 12px rgba(0,0,0,0.18);
+  font-size: 20px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.15s;
+}
+.view-switcher button:active { transform: scale(0.92); }
+
+/* ===== 离线 / 待上传横幅 ===== */
+.offline-banner {
+  position: fixed; top: max(64px, calc(env(safe-area-inset-top) + 56px));
+  left: 50%; transform: translateX(-50%);
+  z-index: 140;
+  background: rgba(230,126,34,0.95); color: #fff;
+  font-size: 12.5px; padding: 8px 16px; border-radius: 18px;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+  white-space: nowrap; max-width: 92vw; overflow: hidden; text-overflow: ellipsis;
+}
+.pending-banner {
+  position: fixed;
+  bottom: calc(max(24px, env(safe-area-inset-bottom)) + 76px);
+  left: 50%; transform: translateX(-50%);
+  z-index: 140;
+  background: rgba(255,255,255,0.97); color: #333;
+  font-size: 13px; padding: 9px 16px; border-radius: 20px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer; white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.pending-banner b { color: #1a73e8; font-weight: 600; }
+.pending-banner:active { background: #f0f4fa; }
 
 /* ===== 底部中间上传按钮 ===== */
 .upload-fab {
@@ -740,10 +1081,55 @@ html, body, #app {
   transition: transform 0.2s, box-shadow 0.2s;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
-  padding-bottom: 4px; /* 视觉居中 ＋ */
+  padding-bottom: 4px;
 }
 .upload-fab:hover { transform: translateX(-50%) scale(1.08); box-shadow: 0 8px 24px rgba(26,115,232,0.6); }
 .upload-fab:active { transform: translateX(-50%) scale(0.94); }
+
+/* ===== 海报入口（加号左侧） ===== */
+.poster-fab {
+  position: fixed; left: 50%; transform: translateX(-68px);
+  bottom: max(30px, calc(env(safe-area-inset-bottom) + 6px));
+  z-index: 150;
+  width: 48px; height: 48px; border-radius: 50%;
+  background: rgba(255,255,255,0.95); color: #1a73e8;
+  border: 1.5px solid #dfe6ef; cursor: pointer;
+  font-size: 22px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.poster-fab:hover { transform: translateX(-68px) scale(1.06); }
+.poster-fab:active { transform: translateX(-68px) scale(0.94); }
+
+/* ===== 更新弹窗 ===== */
+.upd-mask {
+  position: fixed; inset: 0; z-index: 320;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.upd-card {
+  background: #fff; border-radius: 14px;
+  width: min(360px, 100%);
+  padding: 22px 20px 16px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+}
+.upd-title { font-size: 17px; font-weight: 600; color: #222; margin-bottom: 10px; }
+.upd-notes {
+  font-size: 13px; color: #666; line-height: 1.6;
+  background: #f7f9fc; border-radius: 10px;
+  padding: 10px 12px; margin-bottom: 16px;
+  max-height: 120px; overflow-y: auto;
+}
+.upd-actions { display: flex; gap: 10px; }
+.upd-btn {
+  flex: 1; min-height: 42px; border-radius: 10px;
+  border: none; font-size: 15px; font-weight: 500; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.upd-btn.ghost { background: #f2f4f7; color: #555; }
+.upd-btn.primary { background: #1a73e8; color: #fff; }
 
 /* ===== 上传方式选择（动作面板） ===== */
 .sheet-mask {

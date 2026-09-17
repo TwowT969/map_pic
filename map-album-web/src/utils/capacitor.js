@@ -17,8 +17,12 @@ function getPlatform() {
 
 // ==================== Camera ====================
 
+function blobToFile(blob, name) {
+  return new File([blob], name, { type: blob.type || 'image/jpeg' })
+}
+
 /**
- * 调用原生相机拍照，返回 File-like 对象（包含 blob 和文件名）。
+ * 调用原生相机拍照，返回 File-like 对象。
  * Web 降级: <input type="file" capture="camera">
  * Native: Capacitor Camera 插件。
  */
@@ -31,7 +35,6 @@ export async function takePhoto() {
       source: CameraSource.Camera,
       resultType: 'base64'
     })
-    // 转成 Blob
     const base64 = photo.base64String
     const mime = `image/${photo.format || 'jpeg'}`
     const byteChars = atob(base64)
@@ -50,7 +53,7 @@ export async function takePhoto() {
     input.capture = 'environment'
     input.onchange = () => {
       const file = input.files?.[0]
-      file ? resolve(file) : reject(new Error('未选择照片'))
+      file ? resolve(file) : reject(new Error('取消拍照'))
     }
     input.oncancel = () => reject(new Error('取消拍照'))
     input.click()
@@ -58,33 +61,51 @@ export async function takePhoto() {
 }
 
 /**
- * 从相册选择多张照片
+ * 从相册选择照片（原生端支持一次多选，最多 20 张）。
  * Web 降级: <input type="file" multiple>
- * Native: Capacitor Camera 插件（多次调用 pickImages 或者用 photo library）
+ * Native: Capacitor Camera.pickImages（Android 13+ 走系统照片选择器）。
  */
 export async function pickFromGallery(multiple = true) {
   if (hasCapacitor()) {
     const { Camera, CameraSource } = await import('@capacitor/camera')
-    const files = []
-    // Capacitor Camera 单次只能选一张，多次循环
-    // 或者使用 @capacitor-community/camera-preview （略）
-    // 这里先用单张模式，多张需用户多次操作
-    const photo = await Camera.getPhoto({
-      quality: 90,
-      allowEditing: false,
-      source: CameraSource.Photos,
-      resultType: 'base64'
-    })
-    const base64 = photo.base64String
-    const mime = `image/${photo.format || 'jpeg'}`
-    const byteChars = atob(base64)
-    const byteNums = new Array(byteChars.length)
-    for (let i = 0; i < byteChars.length; i++) {
-      byteNums[i] = byteChars.charCodeAt(i)
+    try {
+      const result = await Camera.pickImages({
+        quality: 90,
+        limit: 20
+      })
+      const files = []
+      for (let i = 0; i < (result.photos || []).length; i++) {
+        const p = result.photos[i]
+        try {
+          const resp = await fetch(p.webPath)
+          const blob = await resp.blob()
+          files.push(blobToFile(blob, `photo_${Date.now()}_${i}.${p.format || 'jpg'}`))
+        } catch (e) {
+          console.warn('[capacitor] 读取所选照片失败:', e)
+        }
+      }
+      if (files.length > 0) return files
+      throw new Error('未选择照片')
+    } catch (e) {
+      if (e && e.message === '未选择照片') throw e
+      // 老设备 pickImages 不可用 → 单张兜底
+      console.warn('[capacitor] pickImages 不可用，降级单选:', e?.message || e)
+      const photo = await Camera.getPhoto({
+        quality: 90,
+        allowEditing: false,
+        source: CameraSource.Photos,
+        resultType: 'base64'
+      })
+      const base64 = photo.base64String
+      const mime = `image/${photo.format || 'jpeg'}`
+      const byteChars = atob(base64)
+      const byteNums = new Array(byteChars.length)
+      for (let i = 0; i < byteChars.length; i++) {
+        byteNums[i] = byteChars.charCodeAt(i)
+      }
+      const byteArr = new Uint8Array(byteNums)
+      return [new File([byteArr], `photo_${Date.now()}.${photo.format || 'jpg'}`, { type: mime })]
     }
-    const byteArr = new Uint8Array(byteNums)
-    files.push(new File([byteArr], `photo_${Date.now()}.${photo.format || 'jpg'}`, { type: mime }))
-    return files
   }
   // Web 降级
   return new Promise((resolve, reject) => {
@@ -104,11 +125,49 @@ export async function pickFromGallery(multiple = true) {
   })
 }
 
+// ==================== 图片压缩 ====================
+
+/**
+ * 客户端图片压缩：最长边限制 + JPEG 质量；小图直接返回原文件。
+ * 注意：压缩会丢弃 EXIF（含 GPS/拍摄时间），调用方必须先解析元数据再压缩，
+ * 并通过接口参数显式携带元数据。
+ * @returns {Promise<File>}
+ */
+export async function compressImage(file, maxSide = 2048, quality = 0.85) {
+  if (!file || !file.type || !file.type.startsWith('image/')) return file
+  if (file.type === 'image/gif') return file // 动图不压
+  try {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+    const longSide = Math.max(bitmap.width, bitmap.height)
+    const scale = Math.min(1, maxSide / longSide)
+    // 小图且体积不大：不压（避免重编码损失）
+    if (scale >= 1 && file.size < 1.5 * 1024 * 1024) {
+      bitmap.close && bitmap.close()
+      return file
+    }
+    const w = Math.max(1, Math.round(bitmap.width * scale))
+    const h = Math.max(1, Math.round(bitmap.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(bitmap, 0, 0, w, h)
+    bitmap.close && bitmap.close()
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+    if (!blob || blob.size >= file.size) return file
+    const baseName = (file.name || 'photo').replace(/\.[^.]+$/, '')
+    return new File([blob], baseName + '_c.jpg', { type: 'image/jpeg' })
+  } catch (e) {
+    console.warn('[capacitor] 压缩失败，使用原图:', e?.message || e)
+    return file
+  }
+}
+
 // ==================== Geolocation ====================
 
 /**
  * 获取当前位置（高精度）。
- * 返回 { lat, lng } (GCJ-02 不可用原生直接获取，返回 WGS-84)。
+ * 返回 { lat, lng }（WGS-84，由调用方转 GCJ-02）。
  */
 export async function getCurrentPosition() {
   if (hasCapacitor()) {
@@ -136,6 +195,21 @@ export async function getCurrentPosition() {
   })
 }
 
+/**
+ * 请求定位权限（原生端；先于权限弹窗给出用途说明）。
+ * @returns {Promise<boolean>} 是否已授权
+ */
+export async function requestLocationPermission() {
+  if (!hasCapacitor()) return true
+  try {
+    const { Geolocation } = await import('@capacitor/geolocation')
+    const status = await Geolocation.requestPermissions(['location', 'coarseLocation'])
+    return status && status.location === 'granted'
+  } catch (e) {
+    return false
+  }
+}
+
 // ==================== Filesystem ====================
 
 /**
@@ -146,19 +220,16 @@ export async function cacheImage(url, key) {
   if (!hasCapacitor()) return null
   try {
     const { Filesystem, Directory } = await import('@capacitor/filesystem')
-    // 检查是否已缓存
     try {
-      await Filesystem.stat({ path: `cache/${key}`, directory: Directory.Cache })
-      // 已存在，返回已有路径
       const { uri } = await Filesystem.getUri({
         path: `cache/${key}`,
         directory: Directory.Cache
       })
+      await Filesystem.stat({ path: `cache/${key}`, directory: Directory.Cache })
       return uri
     } catch {
       // 未缓存，下载
     }
-    // 下载并写入
     const response = await fetch(url)
     const blob = await response.blob()
     const base64 = await blobToBase64(blob)
@@ -253,7 +324,6 @@ function blobToBase64(blob) {
     const reader = new FileReader()
     reader.onloadend = () => {
       const result = reader.result
-      // data:image/...;base64,xxxx → return xxxx
       resolve(result.split(',')[1])
     }
     reader.onerror = reject

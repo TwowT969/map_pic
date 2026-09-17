@@ -1,8 +1,10 @@
 package org.lxp.mapalbum.service.photo;
 
 import org.lxp.mapalbum.controller.app.photo.vo.PhotoRespVO;
+import org.lxp.mapalbum.controller.app.photo.vo.PhotoUpdateReqVO;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -35,9 +37,20 @@ public interface PhotoService {
      * @param spotId      关联点位 ID
      * @param userId      上传用户 ID
      * @param description 用户描述（可选）
+     * @param shotTime    拍摄时间（EXIF，可选）
+     * @param device      拍摄设备（EXIF Make+Model，可选）
      * @return 创建后的照片
      */
-    PhotoRespVO create(MultipartFile file, Long spotId, Long userId, String description);
+    PhotoRespVO create(MultipartFile file, Long spotId, Long userId, String description,
+                       LocalDateTime shotTime, String device);
+
+    /**
+     * 更新照片展示属性（备注/排序/封面；资源归属校验）。
+     *
+     * @param reqVO 更新请求
+     * @return 更新后的照片
+     */
+    PhotoRespVO update(PhotoUpdateReqVO reqVO);
 
     /**
      * 删除照片（逻辑删除），并同步更新点位的 photo_count。

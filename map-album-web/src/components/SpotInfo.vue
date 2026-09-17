@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="section-title">📌 点位信息</div>
+    <div class="section-title">📌 打卡点信息</div>
     <div class="spot-info">
       <div class="info-row"><span class="label">名称</span><span class="value">{{ spot.name || '-' }}</span></div>
       <div v-if="spot.category" class="info-row"><span class="label">分类</span><span class="value">{{ catLabel(spot.category) }}</span></div>

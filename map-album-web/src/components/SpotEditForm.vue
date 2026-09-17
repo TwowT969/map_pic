@@ -1,8 +1,8 @@
 <template>
   <div>
-    <div class="section-title">{{ mode === 'create' ? '📝 新建点位' : '✏️ 编辑点位' }}</div>
+    <div class="section-title">{{ mode === 'create' ? '📝 新建打卡点' : '✏️ 编辑打卡点' }}</div>
     <div class="form-group">
-      <label>点位名称 <span v-if="mode==='create'" style="color:red">*</span></label>
+      <label>打卡点名称 <span v-if="mode==='create'" style="color:red">*</span></label>
       <input v-model="form.name" placeholder="给这个位置起个名字">
     </div>
     <div class="form-row">
@@ -28,7 +28,7 @@
       <div class="form-group"><label>区</label><input v-model="form.district"></div>
     </div>
     <button class="btn btn-primary btn-block" @click="onSubmit">
-      {{ mode === 'create' ? '创建点位' : '保存修改' }}
+      {{ mode === 'create' ? '创建打卡点' : '保存修改' }}
     </button>
     <button class="btn btn-block btn-cancel" @click="$emit('cancel')">
       {{ mode === 'create' ? '取消' : '返回详情' }}
@@ -62,7 +62,7 @@ const form = reactive({
 
 function onSubmit() {
   if (!form.name.trim()) {
-    alert('请输入点位名称')
+    alert('请输入打卡点名称')
     return
   }
   const data = {

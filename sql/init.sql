@@ -20,6 +20,7 @@ CREATE TABLE `user` (
     `id`             BIGINT       NOT NULL AUTO_INCREMENT,
     `sso_user_id`    VARCHAR(64)  NOT NULL COMMENT 'SSO 用户唯一标识',
     `sso_provider`   VARCHAR(30)  NOT NULL DEFAULT '' COMMENT 'SSO 来源(cas/oauth2/wechat/miniapp)',
+    `password`       VARCHAR(128) DEFAULT NULL COMMENT '登录密码(SHA-256摘要,app通道必填,dev通道为空)',
     `nickname`       VARCHAR(50)  DEFAULT NULL COMMENT '昵称',
     `avatar_url`     VARCHAR(500) DEFAULT NULL COMMENT '头像 URL',
     `phone`          VARCHAR(20)  DEFAULT NULL COMMENT '手机号',
@@ -142,3 +143,27 @@ CREATE TABLE `photo` (
 -- 4) SSO 用户首次登录时由 Service 层负责「查 sso_user_id + sso_provider → 无则 INSERT、有则 UPDATE 昵称/头像」。
 -- 5) SPATIAL INDEX 需要 MySQL 8.0+，且表必须为 InnoDB；SRID 4326 对应 WGS84/GCJ-02。
 -- 6) docker-compose.yml 中 MySQL 容器名供 spring.datasource.url 引用（jdbc:mysql://mysql:3306/map_album...）。
+
+
+-- ============================================================
+-- App 端日志/埋点（崩溃上报 + 轻量行为埋点）
+-- ============================================================
+CREATE TABLE `app_log` (
+    `id`          BIGINT        NOT NULL AUTO_INCREMENT,
+    `user_id`     BIGINT        DEFAULT NULL COMMENT '上报用户(未登录可空)',
+    `level`       VARCHAR(16)   NOT NULL DEFAULT 'info' COMMENT '级别 info/error',
+    `tag`         VARCHAR(64)   DEFAULT NULL COMMENT '标签 crash/track:xxx',
+    `message`     VARCHAR(1000) DEFAULT NULL COMMENT '摘要信息',
+    `stack`       TEXT          COMMENT '堆栈',
+    `app_version` VARCHAR(32)   DEFAULT NULL COMMENT 'App版本号',
+    `device`      VARCHAR(200)  DEFAULT NULL COMMENT '设备描述',
+    `creator`     BIGINT        DEFAULT NULL COMMENT '创建人',
+    `create_time` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updater`     BIGINT        DEFAULT NULL COMMENT '更新人',
+    `update_time` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    `deleted`     TINYINT       NOT NULL DEFAULT 0 COMMENT '逻辑删除 0未删 1已删',
+    PRIMARY KEY (`id`),
+    KEY `idx_create_time` (`create_time`),
+    KEY `idx_level` (`level`),
+    KEY `idx_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='App端日志/埋点';

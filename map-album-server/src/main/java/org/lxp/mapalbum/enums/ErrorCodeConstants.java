@@ -18,6 +18,9 @@ public interface ErrorCodeConstants {
     ErrorCode USER_DISABLED = new ErrorCode(1002, "用户已禁用");
     ErrorCode USER_SSO_CONFLICT = new ErrorCode(1003, "SSO 用户标识冲突");
     ErrorCode USER_NOT_LOGIN = new ErrorCode(1004, "账号未登录");
+    ErrorCode USER_PASSWORD_REQUIRED = new ErrorCode(1005, "请输入密码");
+    ErrorCode USER_PASSWORD_WRONG = new ErrorCode(1006, "账号或密码不正确");
+    ErrorCode USER_PASSWORD_TOO_SHORT = new ErrorCode(1007, "密码至少 6 位");
 
     // ==================== 点位 2xxx ====================
 

@@ -5,24 +5,16 @@
       <button class="lb-close" @click="$emit('close')">&times;</button>
 
       <!-- 上一张按钮 -->
-      <button
-        v-if="hasPrev"
-        class="lb-nav lb-prev"
-        @click.stop="goPrev"
-      >
+      <button v-if="hasPrev" class="lb-nav lb-prev" @click.stop="goPrev">
         <span class="arrow">‹</span>
       </button>
 
       <!-- 下一张按钮 -->
-      <button
-        v-if="hasNext"
-        class="lb-nav lb-next"
-        @click.stop="goNext"
-      >
+      <button v-if="hasNext" class="lb-nav lb-next" @click.stop="goNext">
         <span class="arrow">›</span>
       </button>
 
-      <!-- 图片容器（支持手势滑动） -->
+      <!-- 图片容器（手势：滑动翻页 / 双击缩放 / 双指捏合 / 缩放后拖动 / 下滑关闭） -->
       <div
         class="lb-image-wrapper"
         ref="wrapper"
@@ -30,7 +22,28 @@
         @touchmove="onTouchMove"
         @touchend="onTouchEnd"
       >
-        <img :src="currentSrc" alt="大图" @click.stop />
+        <img :src="currentSrc" alt="大图" :style="imgStyle" @click.stop draggable="false" />
+      </div>
+
+      <!-- 备注编辑条（可编辑模式） -->
+      <div class="lb-editbar" v-if="editable && current && current.id" @click.stop>
+        <template v-if="!editing">
+          <div class="lb-desc" @click="startEdit">{{ current.description || '（无备注，点击添加）' }}</div>
+          <button class="lb-act" @click="startEdit" title="编辑备注">✎</button>
+          <button class="lb-act danger" @click="onDelete" title="删除照片">🗑</button>
+        </template>
+        <template v-else>
+          <input
+            ref="editInput"
+            v-model="editText"
+            class="lb-edit-input"
+            maxlength="200"
+            placeholder="输入备注（200 字内）"
+            @keyup.enter="saveEdit"
+          />
+          <button class="lb-act primary" @click="saveEdit">保存</button>
+          <button class="lb-act" @click="cancelEdit">取消</button>
+        </template>
       </div>
 
       <!-- 底部计数 -->
@@ -55,17 +68,21 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { fileUrl } from '../api/index.js'
 
 const props = defineProps({
-  photos: { type: Array, default: () => [] },   // [{ url, thumbUrl }] 或字符串数组
+  photos: { type: Array, default: () => [] },   // 完整照片对象 [{ id, url, thumbUrl, description, ... }]
   index: { type: Number, default: 0 },
-  visible: { type: Boolean, default: false }
+  visible: { type: Boolean, default: false },
+  editable: { type: Boolean, default: false }   // 显示备注编辑/删除
 })
 
-const emit = defineEmits(['close', 'update:index'])
+const emit = defineEmits(['close', 'update:index', 'save-desc', 'delete-photo'])
 const wrapper = ref(null)
+
+// 当前照片
+const current = computed(() => props.photos[props.index] || null)
 
 // 当前图片 URL
 const currentSrc = computed(() => {
@@ -87,53 +104,144 @@ const hasPrev = computed(() => props.index > 0)
 const hasNext = computed(() => props.index < total.value - 1)
 
 function goPrev() {
-  if (hasPrev.value) {
-    emit('update:index', props.index - 1)
-  }
+  if (hasPrev.value) emit('update:index', props.index - 1)
 }
 
 function goNext() {
-  if (hasNext.value) {
-    emit('update:index', props.index + 1)
+  if (hasNext.value) emit('update:index', props.index + 1)
+}
+
+// ===== 缩放/拖动状态 =====
+const scale = ref(1)
+const tx = ref(0)
+const ty = ref(0)
+const transitioning = ref(false)
+let gesture = null
+let lastTapTime = 0
+let lastTapX = 0
+let lastTapY = 0
+
+const imgStyle = computed(() => ({
+  transform: `translate(${tx.value}px, ${ty.value}px) scale(${scale.value})`,
+  transition: transitioning.value ? 'transform 0.2s ease' : 'none'
+}))
+
+function resetTransform() {
+  transitioning.value = true
+  scale.value = 1
+  tx.value = 0
+  ty.value = 0
+  setTimeout(() => { transitioning.value = false }, 220)
+}
+
+function clamp(v, min, max) { return Math.min(max, Math.max(min, v)) }
+
+function touchDist(a, b) {
+  const dx = a.clientX - b.clientX
+  const dy = a.clientY - b.clientY
+  return Math.sqrt(dx * dx + dy * dy) || 1
+}
+
+function toggleZoom() {
+  if (scale.value > 1) {
+    resetTransform()
+  } else {
+    transitioning.value = true
+    scale.value = 2.5
+    tx.value = 0
+    ty.value = 0
+    setTimeout(() => { transitioning.value = false }, 220)
   }
 }
 
-// ===== 键盘事件 =====
-function onKeyDown(e) {
-  if (!props.visible) return
-  if (e.key === 'ArrowLeft') { e.preventDefault(); goPrev() }
-  if (e.key === 'ArrowRight') { e.preventDefault(); goNext() }
-  if (e.key === 'Escape') { emit('close') }
-}
-
-onMounted(() => document.addEventListener('keydown', onKeyDown))
-onBeforeUnmount(() => document.removeEventListener('keydown', onKeyDown))
-
-// ===== 触摸手势 =====
+// ===== 触摸手势（翻页 + 缩放 + 拖动 + 下滑关闭） =====
 let touchStartX = 0
 let touchStartY = 0
 let touchMoved = false
 let touchSwiped = false
 
 function onTouchStart(e) {
-  touchStartX = e.touches[0].clientX
-  touchStartY = e.touches[0].clientY
+  if (e.touches.length === 2) {
+    const a = e.touches[0]
+    const b = e.touches[1]
+    gesture = {
+      type: 'pinch',
+      startDist: touchDist(a, b),
+      startScale: scale.value,
+      startMidX: (a.clientX + b.clientX) / 2,
+      startMidY: (a.clientY + b.clientY) / 2
+    }
+    transitioning.value = false
+    return
+  }
+  const t = e.touches[0]
+  // 双击检测 → 缩放切换
+  const now = Date.now()
+  if (now - lastTapTime < 320 && Math.abs(t.clientX - lastTapX) < 36 && Math.abs(t.clientY - lastTapY) < 36) {
+    lastTapTime = 0
+    toggleZoom()
+    gesture = null
+    return
+  }
+  lastTapTime = now
+  lastTapX = t.clientX
+  lastTapY = t.clientY
+
+  touchStartX = t.clientX
+  touchStartY = t.clientY
   touchMoved = false
   touchSwiped = false
+  gesture = { type: scale.value > 1 ? 'pan' : 'swipe', lastX: t.clientX, lastY: t.clientY }
+  transitioning.value = false
 }
 
 function onTouchMove(e) {
-  if (!touchSwiped) {
-    const dx = e.touches[0].clientX - touchStartX
-    const dy = e.touches[0].clientY - touchStartY
-    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
-      touchMoved = true
+  if (!gesture) return
+  if (gesture.type === 'pinch') {
+    if (e.touches.length === 2) {
+      const a = e.touches[0]
+      const b = e.touches[1]
+      const d = touchDist(a, b)
+      scale.value = clamp(gesture.startScale * (d / gesture.startDist), 1, 4)
+      const mx = (a.clientX + b.clientX) / 2
+      const my = (a.clientY + b.clientY) / 2
+      tx.value += (mx - gesture.startMidX) * 0.6
+      ty.value += (my - gesture.startMidY) * 0.6
+      gesture.startMidX = mx
+      gesture.startMidY = my
     }
+    return
   }
+  if (e.touches.length !== 1) return
+  const t = e.touches[0]
+  if (gesture.type === 'pan') {
+    tx.value += t.clientX - gesture.lastX
+    ty.value += t.clientY - gesture.lastY
+    gesture.lastX = t.clientX
+    gesture.lastY = t.clientY
+    return
+  }
+  // swipe 检测
+  const dx = t.clientX - touchStartX
+  const dy = t.clientY - touchStartY
+  if (Math.abs(dx) > 10 || Math.abs(dy) > 10) touchMoved = true
 }
 
 function onTouchEnd(e) {
-  if (!touchMoved) return
+  if (!gesture) return
+  if (gesture.type === 'pinch') {
+    gesture = null
+    if (scale.value <= 1.02) resetTransform()
+    return
+  }
+  if (gesture.type === 'pan') {
+    gesture = null
+    if (scale.value <= 1.02) resetTransform()
+    return
+  }
+  // swipe
+  gesture = null
+  if (!touchMoved || scale.value > 1) return
   const dx = e.changedTouches[0].clientX - touchStartX
   const dy = e.changedTouches[0].clientY - touchStartY
 
@@ -151,6 +259,55 @@ function onTouchEnd(e) {
     return
   }
 }
+
+// ===== 备注编辑 / 删除 =====
+const editing = ref(false)
+const editText = ref('')
+const editInput = ref(null)
+
+function startEdit() {
+  editText.value = current.value?.description || ''
+  editing.value = true
+  nextTick(() => editInput.value && editInput.value.focus())
+}
+
+function cancelEdit() {
+  editing.value = false
+}
+
+function saveEdit() {
+  if (!current.value) return
+  emit('save-desc', current.value, editText.value.trim())
+  editing.value = false
+}
+
+function onDelete() {
+  if (!current.value) return
+  if (confirm('确定删除这张照片吗？删除后不可恢复。')) {
+    emit('delete-photo', current.value)
+  }
+}
+
+// 切换照片时退出编辑态并复位缩放
+watch(() => props.index, () => {
+  editing.value = false
+  resetTransform()
+})
+watch(() => props.visible, (v) => {
+  if (!v) { editing.value = false; resetTransform() }
+})
+
+// ===== 键盘事件 =====
+function onKeyDown(e) {
+  if (!props.visible) return
+  if (editing.value) return
+  if (e.key === 'ArrowLeft') { e.preventDefault(); goPrev() }
+  if (e.key === 'ArrowRight') { e.preventDefault(); goNext() }
+  if (e.key === 'Escape') { emit('close') }
+}
+
+onMounted(() => document.addEventListener('keydown', onKeyDown))
+onBeforeUnmount(() => document.removeEventListener('keydown', onKeyDown))
 </script>
 
 <style scoped>
@@ -158,7 +315,6 @@ function onTouchEnd(e) {
   position: fixed; inset: 0; background: rgba(0,0,0,0.92);
   z-index: 300; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  /* 安全区域 */
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
@@ -185,7 +341,6 @@ function onTouchEnd(e) {
   touch-action: manipulation;
 }
 .lb-nav:hover { background: rgba(255,255,255,0.3); }
-.lb-nav:active { background: rgba(255,255,255,0.5); }
 .lb-prev { left: max(12px, env(safe-area-inset-left)); }
 .lb-next { right: max(12px, env(safe-area-inset-right)); }
 .arrow { font-size: 36px; line-height: 1; }
@@ -193,14 +348,48 @@ function onTouchEnd(e) {
 /* 图片容器 */
 .lb-image-wrapper {
   flex: 1; display: flex; align-items: center; justify-content: center;
-  touch-action: pan-y; /* 允许纵向滑动关闭，禁止横向缩放 */
-  overflow: hidden; max-width: 100%;
+  overflow: hidden; max-width: 100%; width: 100%;
+  touch-action: none; /* 手势全部接管（缩放/拖动/翻页） */
 }
 .lb-image-wrapper img {
-  max-width: 95vw; max-height: 75vh;
+  max-width: 95vw; max-height: 70vh;
   object-fit: contain; border-radius: 4px;
   user-select: none; -webkit-user-drag: none;
+  will-change: transform;
 }
+
+/* 备注编辑条 */
+.lb-editbar {
+  position: absolute;
+  bottom: max(120px, calc(env(safe-area-inset-bottom) + 100px));
+  left: 50%; transform: translateX(-50%);
+  width: min(560px, 92vw);
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(0,0,0,0.55); border-radius: 10px;
+  padding: 8px 12px; z-index: 3;
+}
+.lb-desc {
+  flex: 1; min-width: 0; color: #eee; font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: text;
+}
+.lb-act {
+  flex-shrink: 0; width: 34px; height: 34px; border-radius: 8px;
+  border: none; background: rgba(255,255,255,0.16); color: #fff;
+  font-size: 15px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.lb-act:active { background: rgba(255,255,255,0.3); }
+.lb-act.danger { color: #ff8f8f; }
+.lb-act.primary { background: #1a73e8; width: auto; padding: 0 12px; font-size: 13px; }
+.lb-edit-input {
+  flex: 1; min-width: 0; height: 34px;
+  border: 1px solid rgba(255,255,255,0.3); border-radius: 8px;
+  background: rgba(255,255,255,0.12); color: #fff;
+  font-size: 14px; padding: 0 10px; outline: none;
+}
+.lb-edit-input::placeholder { color: rgba(255,255,255,0.5); }
 
 /* 计数指示器 */
 .lb-counter {
@@ -226,9 +415,7 @@ function onTouchEnd(e) {
   -webkit-tap-highlight-color: transparent;
 }
 .lb-thumb.active { border-color: #4a90d9; }
-.lb-thumb img {
-  width: 100%; height: 100%; object-fit: cover;
-}
+.lb-thumb img { width: 100%; height: 100%; object-fit: cover; }
 
 /* 动画 */
 .lightbox-enter-active { animation: lb-in 0.3s ease; }
@@ -239,6 +426,5 @@ function onTouchEnd(e) {
 /* 移动端隐藏左右箭头（用手势滑动） */
 @media (max-width: 768px) {
   .lb-nav { display: none; }
-  .lb-image-wrapper { touch-action: pan-x pan-y; }
 }
 </style>

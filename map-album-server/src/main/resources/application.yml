@@ -88,3 +88,8 @@ app:
     type: local
   upload:
     path: /root/map_pic/uploads
+  version:
+    code: 2
+    name: "1.1.0"
+    url: "http://59.110.53.169/apk/map-album-v1.1.0-debug.apk"
+    notes: "上传可靠性/相册时间轴/我的页/HTTPS/崩溃上报" 

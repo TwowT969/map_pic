@@ -31,6 +31,9 @@ public class UserDO extends BaseDO {
     /** SSO 来源（cas / oauth2 / wechat / miniapp） */
     private String ssoProvider;
 
+    /** 登录密码（SHA-256 摘要；app 通道必填，dev 测试通道为空免密） */
+    private String password;
+
     /** 昵称 */
     private String nickname;
 

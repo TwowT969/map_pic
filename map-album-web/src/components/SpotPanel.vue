@@ -39,7 +39,7 @@
 
         <!-- 操作按钮（非编辑态） -->
         <div v-if="!editing" style="display:flex;gap:8px;margin:12px 0;">
-          <button class="btn btn-danger btn-sm" @click="onDelete">🗑 删除点位</button>
+          <button class="btn btn-danger btn-sm" @click="onDelete">🗑 删除打卡点</button>
         </div>
 
         <!-- 照片区域 -->
@@ -149,8 +149,8 @@ function handleClose() {
 
 // Computed
 const title = computed(() => {
-  if (props.isCreating) return '新建点位'
-  return props.spot?.name || '点位详情'
+  if (props.isCreating) return '新建打卡点'
+  return props.spot?.name || '打卡点详情'
 })
 
 const createFormData = computed(() => ({
@@ -187,7 +187,7 @@ const editFormData = computed(() => {
 function onCreate(data) { emit('created', data) }
 function onUpdate(data) { emit('updated', data); editing.value = false }
 function onDelete() {
-  if (confirm(`确定删除点位「${props.spot?.name}」及其所有照片吗？此操作不可恢复。`)) {
+  if (confirm(`确定删除打卡点「${props.spot?.name}」及其所有照片吗？此操作不可恢复。`)) {
     emit('deleted', props.spot.id)
   }
 }

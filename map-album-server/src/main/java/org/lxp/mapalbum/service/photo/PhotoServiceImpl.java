@@ -3,6 +3,7 @@ package org.lxp.mapalbum.service.photo;
 import lombok.extern.slf4j.Slf4j;
 import net.coobird.thumbnailator.Thumbnails;
 import org.lxp.mapalbum.controller.app.photo.vo.PhotoRespVO;
+import org.lxp.mapalbum.controller.app.photo.vo.PhotoUpdateReqVO;
 import org.lxp.mapalbum.dal.dataobject.PhotoDO;
 import org.lxp.mapalbum.dal.dataobject.SpotDO;
 import org.lxp.mapalbum.dal.mysql.PhotoMapper;
@@ -15,11 +16,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
 import static org.lxp.mapalbum.enums.ErrorCodeConstants.PHOTO_NO_PERMISSION;
+import static org.lxp.mapalbum.enums.ErrorCodeConstants.PHOTO_NOT_EXISTS;
 import static org.lxp.mapalbum.enums.ErrorCodeConstants.SPOT_NOT_EXISTS;
 import static org.lxp.mapalbum.framework.common.exception.ServiceExceptionUtil.exception;
 
@@ -84,7 +87,8 @@ public class PhotoServiceImpl implements PhotoService {
     }
 
     @Override
-    public PhotoRespVO create(MultipartFile file, Long spotId, Long userId, String description) {
+    public PhotoRespVO create(MultipartFile file, Long spotId, Long userId, String description,
+                              LocalDateTime shotTime, String device) {
         // 1. 校验点位存在 + 归属（资源归属校验：不可信任前端传参，KSHG 规范 §14.1）
         SpotDO spot = validateSpotExists(spotId);
 
@@ -102,6 +106,8 @@ public class PhotoServiceImpl implements PhotoService {
         photo.setLat(spot.getLat());
         photo.setLng(spot.getLng());
         photo.setDescription(description);
+        photo.setShotTime(shotTime);
+        photo.setDevice(device);
         photo.setAuditStatus(0);
         photo.setSortOrder(0);
         photo.setViewCount(0);
@@ -113,8 +119,33 @@ public class PhotoServiceImpl implements PhotoService {
         // 4. 冗余更新点位 photo_count
         updateSpotPhotoCount(spot);
 
-        log.info("[create][id={} spotId={} userId={}] 照片创建 key={} thumb={}",
-                photo.getId(), spotId, userId, objectKey, thumbKey);
+        log.info("[create][id={} spotId={} userId={}] 照片创建 key={} thumb={} shotTime={}",
+                photo.getId(), spotId, userId, objectKey, thumbKey, shotTime);
+        PhotoRespVO vo = BeanUtils.toBean(photo, PhotoRespVO.class);
+        signUrls(vo);
+        return vo;
+    }
+
+    @Override
+    public PhotoRespVO update(PhotoUpdateReqVO reqVO) {
+        PhotoDO photo = photoMapper.selectById(reqVO.getId());
+        if (photo == null) {
+            log.warn("[update][id={}] 照片不存在", reqVO.getId());
+            throw exception(PHOTO_NOT_EXISTS);
+        }
+        validateOwnership(photo);
+        if (reqVO.getDescription() != null) {
+            photo.setDescription(reqVO.getDescription());
+        }
+        if (reqVO.getSortOrder() != null) {
+            photo.setSortOrder(reqVO.getSortOrder());
+        }
+        if (reqVO.getIsCover() != null) {
+            photo.setIsCover(reqVO.getIsCover());
+        }
+        photoMapper.updateById(photo);
+        log.info("[update][id={}] 照片更新 desc={}", photo.getId(),
+                photo.getDescription() == null ? null : photo.getDescription().length());
         PhotoRespVO vo = BeanUtils.toBean(photo, PhotoRespVO.class);
         signUrls(vo);
         return vo;
@@ -203,7 +234,7 @@ public class PhotoServiceImpl implements PhotoService {
     }
 
     /**
-     * 资源归属校验：登录用户仅可删除自己的照片（系统上下文 DEFAULT_USER_ID 豁免）。
+     * 资源归属校验：登录用户仅可操作自己的照片（系统上下文 DEFAULT_USER_ID 豁免）。
      */
     private void validateOwnership(PhotoDO photo) {
         Long loginUserId = SecurityFrameworkUtils.getLoginUserId();
@@ -211,7 +242,7 @@ public class PhotoServiceImpl implements PhotoService {
             return;
         }
         if (!loginUserId.equals(photo.getUserId())) {
-            log.warn("[validateOwnership][photoId={}, ownerId={}, loginUserId={}] 越权删除被拒绝",
+            log.warn("[validateOwnership][photoId={}, ownerId={}, loginUserId={}] 越权操作被拒绝",
                     photo.getId(), photo.getUserId(), loginUserId);
             throw exception(PHOTO_NO_PERMISSION);
         }

@@ -1,25 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- 允许明文访问本地开发服务器 -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">192.168.0.0/16</domain>
-        <domain includeSubdomains="true">10.0.0.0/8</domain>
-    </domain-config>
-    <!-- 生产环境 HTTPS -->
+    <!-- 基础：系统 CA，禁明文 -->
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
-    <!-- 高德地图 CDN -->
-    <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">amap.com</domain>
-        <domain includeSubdomains="true">alicdn.com</domain>
-        <domain includeSubdomains="true">aliyuncs.com</domain>
+    <!-- Capacitor 开发调试主机 -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <domain includeSubdomains="false">10.0.3.2</domain>
+    </domain-config>
+    <!-- API 服务器：信任自签证书（HTTPS）；允许明文回退（443 未放行时降级 HTTP） -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">59.110.53.169</domain>
         <trust-anchors>
             <certificates src="system" />
+            <certificates src="@raw/server_cert" />
         </trust-anchors>
     </domain-config>
 </network-security-config>
