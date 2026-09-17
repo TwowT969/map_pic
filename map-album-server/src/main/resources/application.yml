@@ -89,7 +89,7 @@ app:
   upload:
     path: /root/map_pic/uploads
   version:
-    code: 5
-    name: "1.2.0"
-    url: "http://59.110.53.169/apk/map-album-v1.2.0-debug.apk"
-    notes: 本地化存储：图片只存设备本地，服务器仅存元数据；海报修复
+    code: 6
+    name: "1.3.0"
+    url: "http://59.110.53.169/apk/map-album-v1.3.0-debug.apk"
+    notes: v1.3.0：比例尺小于10km时点位标记最多展示3张本地图片；点击点位图片全屏浏览，左右滑动按距离（临时链表头尾插入）从近到远切换；修复创建无图点位后点击无响应；图片仍只存设备本地，仅登记图片信息

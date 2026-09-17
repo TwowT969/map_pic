@@ -1,28 +1,29 @@
 import { fileUrl } from '../api/index.js'
 
 // 构建自定义 Marker 的 HTMLElement
-// createMarkerElement：详情视图（>=14 级）—— 照片缩略图 + 圆点 + 名称
-// createSimpleMarkerElement：远视图（<14 级）—— 纯图标 + 照片数，不加载任何图片
+// createMarkerElement：图片形态（比例尺 < 10km）—— 最多 3 张本地缩略图拼贴 + 圆点 + 名称，
+//   缩略图可点击（onThumbClick 回调），点击直接进入全屏浏览（需求3/4）
+// createSimpleMarkerElement：粗比例尺 —— 纯图标 + 照片数，不加载任何图片
 // createPickMarkerElement：上传选点模式 —— 蓝色圆点 + 扩散光圈（可拖动）
-export function createMarkerElement(spot, photo) {
+export function createMarkerElement(spot, photos, onThumbClick) {
   const wrapper = document.createElement('div')
   wrapper.className = 'custom-marker'
 
-  // 照片缩略图区域
+  // 图片拼贴区域：只保留能解析出显示源的图片，最多 3 张（需求3：最多展示三张）
   const photoWrap = document.createElement('div')
   photoWrap.className = 'marker-photo-wrap'
 
-  if (photo && (photo.thumbSrc || photo.src)) {
-    const img = document.createElement('img')
-    img.src = photo.thumbSrc || photo.src || ''
-    img.style.cssText = 'width:100%;height:100%;object-fit:cover'
-    img.onerror = () => {
-      img.style.display = 'none'
-      photoWrap.innerHTML = '<div class="marker-no-photo">📍</div>'
-    }
-    photoWrap.appendChild(img)
-  } else {
+  const list = (Array.isArray(photos) ? photos : (photos ? [photos] : []))
+    .filter(p => p && (p.thumbSrc || p.src))
+    .slice(0, 3)
+
+  if (list.length === 0) {
     photoWrap.innerHTML = '<div class="marker-no-photo">📍</div>'
+  } else if (list.length === 1) {
+    photoWrap.appendChild(_thumb(list[0], onThumbClick))
+  } else {
+    photoWrap.classList.add('marker-collage', 'n' + list.length)
+    list.forEach(p => photoWrap.appendChild(_thumb(p, onThumbClick)))
   }
   wrapper.appendChild(photoWrap)
 
@@ -40,8 +41,29 @@ export function createMarkerElement(spot, photo) {
   return wrapper
 }
 
+/** 单张缩略图（可点击 → 全屏浏览） */
+function _thumb(photo, onThumbClick) {
+  const btn = document.createElement('div')
+  btn.className = 'marker-thumb'
+  btn.setAttribute('data-pid', photo.id != null ? String(photo.id) : '')
+  const img = document.createElement('img')
+  img.src = photo.thumbSrc || photo.src || fileUrl(photo.thumbUrl || photo.url || '')
+  img.alt = ''
+  img.setAttribute('draggable', 'false')
+  img.onerror = () => { btn.style.display = 'none' }
+  btn.appendChild(img)
+  if (typeof onThumbClick === 'function') {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      e.preventDefault()
+      onThumbClick(photo)
+    })
+  }
+  return btn
+}
+
 /**
- * 远视图简化标记：📍 图标 + 照片数角标（无 <img>，零图片请求）。
+ * 粗比例尺简化标记：📍 图标 + 照片数角标（无 <img>，零图片请求）。
  */
 export function createSimpleMarkerElement(spot, photoCount) {
   const wrapper = document.createElement('div')
@@ -102,7 +124,7 @@ export function injectMarkerStyles() {
     .custom-marker:hover { transform: scale(1.08); z-index: 10; }
     .custom-marker.marker-dragging { transform: scale(1.18); z-index: 30; }
     .marker-photo-wrap {
-      width: 48px; height: 48px; border-radius: 8px; overflow: hidden;
+      width: 52px; height: 52px; border-radius: 8px; overflow: hidden;
       border: 2.5px solid #fff; box-shadow: 0 3px 10px rgba(0,0,0,0.25);
       background: #f0f0f0;
     }
@@ -118,6 +140,25 @@ export function injectMarkerStyles() {
       font-size: 11px; font-weight: bold; text-align: center;
       border: 2px solid #fff; box-sizing: border-box;
     }
+
+    /* ===== 图片拼贴（1 / 2 / 3 张） ===== */
+    .marker-collage {
+      display: grid; gap: 1px; background: #dfe6ee;
+    }
+    .marker-collage.n2 { grid-template-columns: 1fr 1fr; }
+    .marker-collage.n3 { grid-template-columns: 1.6fr 1fr; grid-template-rows: 1fr 1fr; }
+    .marker-collage.n3 .marker-thumb:first-child { grid-row: 1 / 3; }
+    .marker-thumb {
+      position: relative; overflow: hidden; cursor: pointer;
+      background: #e8edf3; padding: 0; border: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .marker-thumb img {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+      pointer-events: none; user-select: none; -webkit-user-drag: none;
+    }
+    .marker-thumb:active { filter: brightness(0.85); }
+
     .marker-dot {
       width: 10px; height: 10px; border-radius: 50%;
       background: #4a90d9; border: 2px solid #fff;

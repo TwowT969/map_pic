@@ -160,6 +160,7 @@ import {
   requestLocationPermission, compressImage, onNetworkChange
 } from './utils/capacitor.js'
 import { addPending, listPending, removePending, countPending } from './utils/pendingQueue.js'
+import { buildBrowseChain } from './utils/browseChain.js'
 import { track, reportError, flush, installGlobalErrorHandlers } from './utils/applog.js'
 import SearchBar from './components/SearchBar.vue'
 import MapContainer from './components/MapContainer.vue'
@@ -362,6 +363,7 @@ async function onMapReady(containerId) {
       () => photosStore.photosBySpot.value,
       {
         onMarkerClick,
+        onMarkerPhotoClick,
         onMarkerMoved,
         onPickMove
       }
@@ -826,6 +828,38 @@ function onMarkerClick(spot) {
   if (!photosStore.photosBySpot.value[spot.id]) {
     photosStore.loadPhotos(spot.id).catch(() => {})
   }
+}
+
+/**
+ * 点击点位标记上的图片 → 全屏浏览（需求4）：
+ * 以当前位置为基准，把全部图片按"到用户的距离"加入临时链表头/尾
+ * （更近 → 头插，更远 → 尾插），从被点图片开始沿链表左右滑动切换。
+ */
+async function onMarkerPhotoClick(spot, photo) {
+  let userLoc = null
+  try {
+    const pos = await Promise.race([
+      getCurrentPosition(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('定位超时')), 2500))
+    ])
+    userLoc = wgs84ToGcj02({ lng: pos.lng, lat: pos.lat })
+  } catch (e) {
+    userLoc = readHistory() || null
+  }
+  if (!userLoc && map.value) {
+    try {
+      const c = map.value.getCenter()
+      userLoc = { lng: c.getLng(), lat: c.getLat() }
+    } catch (err) { /* ignore */ }
+  }
+  const spotsMap = {}
+  spotsStore.spots.value.forEach(s => { spotsMap[s.id] = { lng: Number(s.lng), lat: Number(s.lat) } })
+  const chain = buildBrowseChain(photosStore.allPhotos.value, spotsMap, userLoc, photo && photo.id)
+  if (!chain.photos.length) { showToast('没有可浏览的图片'); return }
+  lightboxPhotos.value = chain.photos
+  lightboxIndex.value = chain.startIndex
+  lightboxVisible.value = true
+  track('marker_photo_open', (chain.orderedBy === 'distance' ? 'dist:' : 'time:') + chain.photos.length)
 }
 
 function onManageSpot() {

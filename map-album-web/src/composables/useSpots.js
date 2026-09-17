@@ -2,9 +2,12 @@ import { ref } from 'vue'
 import { fetchSpots, createSpot as apiCreateSpot, updateSpot as apiUpdateSpot, deleteSpot as apiDeleteSpot } from '../api/index.js'
 import { createMarkerElement, createSimpleMarkerElement, createPickMarkerElement } from '../utils/marker.js'
 
-// 缩放分级阈值：地图缩放 >= DETAIL_ZOOM 级才渲染照片缩略图标记；
-// 更小时只渲染"📍图标 + 照片数"简化标记（不含 <img>，零图片请求，防止大量加载卡顿）
-const DETAIL_ZOOM = 14
+// 比例尺阈值（需求3）：比例尺 < 10km 时点位标记展示图片拼贴（最多 3 张、本地加载）；
+// 更粗的比例尺只渲染"📍图标 + 照片数"简化标记（不含 <img>，零图片请求，防止大量加载卡顿）。
+// 实现按 web 墨卡托估算每像素米数 × 100px 作为"比例尺距离"，
+// 并加滞回区间，避免在 10km 临界值附近来回缩放时反复重渲染。
+const SCALE_SHOW_M = 10000    // 显示图片：比例尺 < 10km
+const SCALE_HYSTER_M = 11500  // 滞回：已显示时超过该值才切回简化标记
 // 长按触发时长（毫秒）：长按标记后进入拖动，松手保存新位置
 const LONG_PRESS_MS = 450
 
@@ -17,19 +20,18 @@ export function useSpots() {
 
   let _map = null
   let _amap = null
-  let _latestPhotoMap = () => ({})
-  let _photoCountMap = () => ({})
+  let _photoListMap = () => ({})    // spotId → 照片数组（thumbSrc 已解析为本地可显示源）
+  let _handlers = {}                // { onMarkerClick, onMarkerPhotoClick, onMarkerMoved, onPickMove }
   let _cluster = null
-  let _lastDetail = null
-  let _handlers = {}                // { onMarkerClick, onMarkerMoved, onPickMove }
+  let _photosOn = false             // 当前标记形态是否为"展示图片拼贴"
   let _pickMarker = null
   let _justDragged = false          // 拖动刚结束的短暂时间片内屏蔽 click
+  let _lastClick = { id: 0, ts: 0 } // 点击去重（集群 click 与标记 click 可能同时触发）
 
-  async function bind(mapInstance, amapInstance, latestPhotoMapGetter, photoCountMapGetter, handlers = {}) {
+  async function bind(mapInstance, amapInstance, latestPhotoMapGetter, photoListMapGetter, handlers = {}) {
     _map = mapInstance
     _amap = amapInstance
-    _latestPhotoMap = latestPhotoMapGetter
-    _photoCountMap = photoCountMapGetter || (() => ({}))
+    _photoListMap = photoListMapGetter || (() => ({}))
     _handlers = handlers
 
     // 加载点聚合插件
@@ -45,9 +47,15 @@ export function useSpots() {
       renderMarker: _renderMarker
     })
 
-    // 聚合点点击 → 放大展开
+    // 聚合点点击 → 多点聚合放大展开；单点兜底触发点位点击
+    // （部分机型/版本点击单个标记只冒泡到集群事件，不处理会导致"点击点位无响应"）
     _cluster.on('click', (item) => {
-      if (item.clusterData.length <= 1) return // 单个标记不处理
+      if (item.clusterData.length <= 1) {
+        const sid = item.clusterData[0] && item.clusterData[0].spotId
+        const s = spots.value.find(x => x.id === sid)
+        if (s) _dispatchMarkerClick(s)
+        return
+      }
       let lngSum = 0, latSum = 0
       item.clusterData.forEach(d => {
         lngSum += d.lnglat[0]
@@ -57,18 +65,46 @@ export function useSpots() {
         [lngSum / item.clusterData.length, latSum / item.clusterData.length])
     })
 
-    // 缩放跨过详情阈值 → 重渲染标记（切换 简化图标 / 照片缩略图 两种形态）
+    // 缩放跨过比例尺阈值 → 重渲染标记（切换 简化图标 / 图片拼贴 两种形态）
     _map.on('zoomend', _onZoomEnd)
+    _photosOn = _computeShow()
   }
 
-  function _isDetail() {
-    return !!(_map && _map.getZoom() >= DETAIL_ZOOM)
+  // ===== 比例尺估算：web 墨卡托 每像素米数 × 100px =====
+  function _metersPerPixel() {
+    try {
+      const z = _map.getZoom()
+      const c = _map.getCenter()
+      const lat = typeof c.getLat === 'function' ? c.getLat() : Number(c.lat)
+      return 156543.03392804097 * Math.cos((lat * Math.PI) / 180) / Math.pow(2, z)
+    } catch (e) { return 1e9 }
+  }
+
+  function _scaleMeters() {
+    return _metersPerPixel() * 100
+  }
+
+  /** 是否展示图片（带滞回：进入 <10km，退出 >11.5km） */
+  function _computeShow() {
+    if (!_map) return false
+    const s = _scaleMeters()
+    return _photosOn ? s < SCALE_HYSTER_M : s < SCALE_SHOW_M
   }
 
   function _onZoomEnd() {
-    if (_lastDetail !== null && _isDetail() !== _lastDetail) {
+    const should = _computeShow()
+    if (should !== _photosOn) {
+      _photosOn = should
       _refreshCluster()
     }
+  }
+
+  /** 标记点击统一入口（去重：同一位置 400ms 内只触发一次，防集群/标记事件双发） */
+  function _dispatchMarkerClick(spot) {
+    const now = Date.now()
+    if (spot && spot.id === _lastClick.id && now - _lastClick.ts < 400) return
+    _lastClick = { id: spot ? spot.id : 0, ts: now }
+    if (spot && _handlers.onMarkerClick) _handlers.onMarkerClick(spot)
   }
 
   // ===== 自定义聚合点样式 =====
@@ -89,22 +125,34 @@ export function useSpots() {
   }
 
   // ===== 自定义单个标记样式 =====
+  function _timeOf(p) {
+    const t = (p && (p.shotTime || p.createTime)) || ''
+    return t ? (new Date(t).getTime() || 0) : 0
+  }
+
   function _renderMarker(context) {
     const d = context.data[0] // 原始数据
     const spot = spots.value.find(s => s.id === d.spotId)
     const name = d.name || (spot && spot.name) || '未命名'
 
     let content
-    if (_isDetail()) {
-      // 近景：照片缩略图标记（thumbUrl 为服务端压缩小图）
-      const latestPhoto = _latestPhotoMap()[d.spotId] || null
+    if (_photosOn) {
+      // 比例尺 < 10km：最多 3 张图片拼贴（本地缩略图，按拍摄时间新→旧取前 3），
+      // 点击缩略图 → 全屏浏览（按距离临时链表排序）
+      const list = [...(_photoListMap()[d.spotId] || [])]
+        .sort((a, b) => _timeOf(b) - _timeOf(a))
+        .slice(0, 3)
       content = createMarkerElement(
         { name },
-        latestPhoto ? { thumbUrl: latestPhoto.thumbUrl || latestPhoto.url } : null
+        list,
+        (photo) => {
+          const s = spots.value.find(x => x.id === d.spotId)
+          if (s && _handlers.onMarkerPhotoClick) _handlers.onMarkerPhotoClick(s, photo)
+        }
       )
     } else {
-      // 远景：纯图标 + 照片数，不加载任何图片
-      const count = (_photoCountMap()[d.spotId] || []).length
+      // 粗比例尺：纯图标 + 照片数，不加载任何图片
+      const count = (_photoListMap()[d.spotId] || []).length
       content = createSimpleMarkerElement({ name }, count)
     }
     context.marker.setContent(content)
@@ -115,11 +163,14 @@ export function useSpots() {
     // 长按标记 → 拖动 → 松手保存新位置
     _attachLongPressDrag(context.marker, content, spot)
 
-    // 点击 → 打开点位详情弹窗（图片列表 + 备注）
+    // 点击 → 打开点位详情弹窗（图片列表 + 备注）。
+    // 先 off('click') 清旧监听：MarkerCluster 会复用 marker 实例反复触发 renderMarker，
+    // 不清理会累积大量带过期闭包的监听器。
+    try { context.marker.off && context.marker.off('click') } catch (e) { /* ignore */ }
     context.marker.on('click', () => {
       if (_justDragged) return
       const s = spots.value.find(x => x.id === d.spotId)
-      if (s && _handlers.onMarkerClick) _handlers.onMarkerClick(s)
+      _dispatchMarkerClick(s)
     })
   }
 
@@ -142,6 +193,8 @@ export function useSpots() {
     const onDown = (e) => {
       if (e.button != null && e.button !== 0) return // 仅左键/触摸
       if (isPicking.value) return                    // 选点模式不拖已有标记
+      // 缩略图上不启动长按拖动（点击缩略图 = 看大图）
+      if (e.target && e.target.closest && e.target.closest('.marker-thumb')) return
       if (!canDrag()) return
       moved = false
       startX = e.clientX
@@ -204,16 +257,15 @@ export function useSpots() {
   // ===== 构建聚合数据并刷新 =====
   function _refreshCluster() {
     if (!_cluster) return
-    const photoMap = _latestPhotoMap()
+    const photoMap = _photoListMap()
     const points = spots.value.map(s => ({
       lnglat: [s.lng, s.lat],
       spotId: s.id,
       name: s.name,
       // 有照片的给更高权重，优先作为聚合代表
-      weight: photoMap[s.id] ? 2 : 1
+      weight: photoMap[s.id] && photoMap[s.id].length > 0 ? 2 : 1
     }))
     _cluster.setData(points)
-    _lastDetail = _isDetail()
   }
 
   function renderAllMarkers() {
