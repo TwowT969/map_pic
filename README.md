@@ -12,7 +12,7 @@
 
 整体技术设计见 [地图相册App技术方案.md](地图相册App技术方案.md)；接口明细见 [docs/API.md](docs/API.md)；版本变更见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
 
-## 功能总览（v1.1.0）
+## 功能总览（v1.2.0）
 
 **地图与点位**
 - 地图主页：定位链依次回退 —— 系统定位（先做权限用途说明）→ 历史定位缓存 → IP 网络定位 → 默认苏州
@@ -25,13 +25,14 @@
 **照片与浏览**
 - EXIF 元数据：解析拍摄时间、设备、GPS（压缩前解析，随上传参数显式携带）
 - 客户端压缩：最长边 2048 / JPEG q0.85，GIF 跳过
-- 上传可靠性：失败或断网自动进入持久化待传队列（IndexedDB），联网后自动补传，横幅一键重试
+- 本地化存储（v1.2.0）：图片只存设备本地（系统相册 + 应用专属目录，H5 存 IndexedDB），服务器仅登记元数据
+- 上传可靠性：元数据登记失败或断网时照片仍在本地，自动进入持久化待同步队列，联网后补登，横幅一键重试
 - 大图光箱：捏合/双击缩放、拖动平移、滑动翻页、下滑关闭；备注在线编辑与删除
 - 相册视图：按拍摄月份分组的时间轴 + 三列宫格，点击进入光箱
 - 搜索：高德地点联想 + 「我的内容」（点位名/标签/地址、照片备注）直达
 
 **账号与我的**
-- 密码登录：`app-` 渠道账号必须密码（SHA-256 摘要，首次登录设置密码），`dev-` 渠道免密（Web 调试用）
+- 密码登录：全账号（App 与网页）统一必须密码（SHA-256 摘要，历史无密码账号首次登录补设）
 - 我的页：昵称修改、点位/照片/城市统计、待上传数、检查更新、隐私政策、退出登录
 
 **可靠性与合规**
@@ -64,7 +65,7 @@ map_pic/
     │   ├── components/             18 个组件（地图、面板、光箱、相册、我的、隐私等）
     │   ├── composables/            useAmap / useSpots / usePhotos / useToast
     │   └── utils/                  capacitor / pendingQueue / applog / coord / marker
-    └── android/                    Capacitor 壳工程（versionCode 2 / versionName 1.1.0）
+    └── android/                    Capacitor 壳工程（versionCode 5 / versionName 1.2.0）
 ```
 
 ## 快速开始
@@ -101,7 +102,7 @@ npm run dev          # dev- 渠道免密登录
 ```
 VITE_API_BASE=http://59.110.53.169/api   # HTTP 回退基址
 VITE_APP_VERSION_CODE=2
-VITE_APP_VERSION_NAME=1.1.0
+VITE_APP_VERSION_NAME=1.2.0
 ```
 
 ### Android APK
@@ -125,7 +126,7 @@ cd android && ./gradlew assembleDebug
 | nginx | 80/443：`/` → `/var/www/map-album`（H5 静态）；`/api/`、`/uploads/` → `127.0.0.1:48081`；`/apk/` → `/var/www/apk/` |
 | HTTPS | 自签证书 `/etc/nginx/ssl/mapalbum.{crt,key}`，SAN：`IP:59.110.53.169, DNS:mapalbum.app`，有效期 10 年 |
 | H5 发布 | `npm run build` 后将 `dist/` 拷贝到 `/var/www/map-album/` |
-| APK 发布 | 拷贝到 `/var/www/apk/map-album-v1.1.0-debug.apk`，并同步 `application.yml` 的 `app.version.download-url` |
+| APK 发布 | 拷贝到 `/var/www/apk/map-album-v1.2.0-debug.apk`，并同步 `application.yml` 的 `app.version.download-url` |
 
 > **注意**：云服务器安全组目前仅放行 22/80。需在阿里云控制台放行 443 后 HTTPS 才对外生效；
 > 放行前 APK 端探测 HTTPS 失败会自动回退 HTTP，功能不受影响。
@@ -139,6 +140,8 @@ cd android && ./gradlew assembleDebug
 
 ## 版本历史
 
+- **v1.2.0**（versionCode 5）：本地化存储 —— 图片只存设备本地（系统相册 + 应用专属目录），远程仅登记元数据；海报胶片墙修复。详见 [docs/CHANGELOG.md](docs/CHANGELOG.md)
+- **v1.1.2**（versionCode 4）：挖孔屏适配、底部 Tab 导航、Android 返回分层、动作面板重设计、海报入口移至「我的」
 - **v1.1.1**（versionCode 3）：登录全面改版 —— 移除免密通道（全账号必须密码）、登录页重设计（加载动画/密码可见切换/错误提示）
 - **v1.1.0**（versionCode 2）：P0+P1 补全 —— 上传可靠性、相册时间轴、我的页、密码登录、隐私合规、光箱手势、应用内更新、HTTPS。详见 [docs/CHANGELOG.md](docs/CHANGELOG.md)
 - **v1.0**（versionCode 1）：地图主页、拍照/相册上传、选点面板、缩略图聚合标记、详情弹窗、照片备注、长按拖动改位

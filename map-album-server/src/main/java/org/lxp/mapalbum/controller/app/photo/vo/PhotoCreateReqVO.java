@@ -2,13 +2,11 @@ package org.lxp.mapalbum.controller.app.photo.vo;
 
 import lombok.Data;
 
-import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotNull;
 import java.io.Serializable;
-import java.math.BigDecimal;
 
 /**
- * 照片创建请求 VO（KSHG 规范 §5.1 ReqVO）。
+ * 照片创建请求 VO（本地化存储：图片文件只存设备本地，远程仅登记元数据）。
  *
  * @author lxp
  */
@@ -20,28 +18,18 @@ public class PhotoCreateReqVO implements Serializable {
     @NotNull(message = "关联点位 ID 不能为空")
     private Long spotId;
 
-    @NotNull(message = "上传用户 ID 不能为空")
-    private Long userId;
-
-    private String ssoUserId;
-
-    @NotBlank(message = "图片 URL 不能为空")
-    private String url;
-
-    @NotNull(message = "拍摄纬度不能为空")
-    private BigDecimal lat;
-
-    @NotNull(message = "拍摄经度不能为空")
-    private BigDecimal lng;
-
-    private String thumbUrl;
-    private Integer width;
-    private Integer height;
-    private Long sizeBytes;
-    private String format;
-    private String device;
+    /** 用户描述 / 备注 */
     private String description;
 
-    public PhotoCreateReqVO() {
-    }
+    /** 拍摄时间（yyyy-MM-dd HH:mm:ss，来自 EXIF，可选） */
+    private String shotTime;
+
+    /** 拍摄设备（EXIF Make + Model，可选） */
+    private String device;
+
+    /** 设备本地原图路径 */
+    private String localPath;
+
+    /** 设备本地缩略图路径 */
+    private String localThumbPath;
 }

@@ -93,8 +93,10 @@ CREATE TABLE `photo` (
     `user_id`        BIGINT       NOT NULL COMMENT '上传用户(关联 user.id)',
     `sso_user_id`    VARCHAR(64)  DEFAULT NULL COMMENT 'SSO用户标识(冗余字段,跨服务查询用)',
     -- 存储
-    `url`            VARCHAR(500) NOT NULL COMMENT 'OSS 原图 URL',
+    `url`            VARCHAR(500) DEFAULT NULL COMMENT '远程原图(旧数据兼容,本地化后新记录为空)',
     `thumb_url`      VARCHAR(500) DEFAULT NULL COMMENT '缩略图 URL',
+    `local_path`     VARCHAR(256) DEFAULT NULL COMMENT '设备本地原图路径',
+    `local_thumb_path` VARCHAR(256) DEFAULT NULL COMMENT '设备本地缩略图路径',
     -- 图片元数据(EXIF + OSS 回写)
     `width`          INT          DEFAULT NULL COMMENT '图片宽度(px)',
     `height`         INT          DEFAULT NULL COMMENT '图片高度(px)',

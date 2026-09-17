@@ -16,20 +16,30 @@
       </div>
 
       <!-- 相册视图（时间轴） -->
-      <AlbumView v-if="activeView === 'album'" @back="switchView('map')" />
+      <AlbumView v-if="activeView === 'album'" />
       <!-- 我的视图 -->
       <ProfileView
         v-if="activeView === 'profile'"
         :pending-count="pendingCount"
-        @back="switchView('map')"
         @check-update="checkUpdate(true)"
       />
 
-      <!-- 视图切换（地图视图左下角） -->
-      <div class="view-switcher" v-if="activeView === 'map'">
-        <button title="相册" @click="switchView('album')">🖼️</button>
-        <button title="我的" @click="switchView('profile')">👤</button>
-      </div>
+      <!-- 底部标签栏：地图 / 相册 / 我的 -->
+      <nav class="tab-bar">
+        <button class="tab-item" :class="{ active: activeView === 'map' }" @click="switchView('map')">
+          <span class="tab-icon">🗺️</span>
+          <span class="tab-label">地图</span>
+        </button>
+        <button class="tab-item" :class="{ active: activeView === 'album' }" @click="switchView('album')">
+          <span class="tab-icon">🖼️</span>
+          <span class="tab-label">相册</span>
+          <span class="tab-badge" v-if="totalPhotos">{{ totalPhotos > 99 ? '99+' : totalPhotos }}</span>
+        </button>
+        <button class="tab-item" :class="{ active: activeView === 'profile' }" @click="switchView('profile')">
+          <span class="tab-icon">👤</span>
+          <span class="tab-label">我的</span>
+        </button>
+      </nav>
 
       <!-- 离线横幅 -->
       <div class="offline-banner" v-if="isOffline && activeView === 'map'">
@@ -47,18 +57,26 @@
       </div>
 
       <!-- 底部中间蓝色加号：上传入口 -->
-      <button class="upload-fab" v-if="activeView === 'map'" @click.stop="sheetOpen = true" aria-label="上传照片">＋</button>
+      <button class="upload-fab" v-if="activeView === 'map'" @click.stop="openSheet" aria-label="添加照片">＋</button>
 
-      <!-- 分享海报入口 -->
-      <button class="poster-fab" v-if="activeView === 'map'" @click="openPoster" aria-label="生成分享海报">🖼️</button>
 
       <!-- 上传方式选择：拍照 / 从相册选择 -->
       <Transition name="fade">
         <div v-if="sheetOpen" class="sheet-mask" @click="sheetOpen = false"></div>
       </Transition>
       <div class="action-sheet" :class="{ open: sheetOpen }">
-        <button class="sheet-item" @click="onTakePhoto">📷 拍照</button>
-        <button class="sheet-item" @click="onPickGallery">🖼️ 从相册选择</button>
+        <div class="sheet-head">
+          <b>添加照片</b>
+          <span>选择照片后会落到地图当前位置，可拖动蓝色标记校准</span>
+        </div>
+        <button class="sheet-item" @click="onTakePhoto">
+          <span class="sheet-emoji">📷</span>
+          <span class="sheet-text"><b>拍照</b><small>拍摄新照片，自动记录位置与拍摄时间</small></span>
+        </button>
+        <button class="sheet-item" @click="onPickGallery">
+          <span class="sheet-emoji">🖼️</span>
+          <span class="sheet-text"><b>从相册选择</b><small>批量选择已有照片（一次最多 20 张）</small></span>
+        </button>
         <button class="sheet-item cancel" @click="sheetOpen = false">取消</button>
       </div>
 
@@ -121,8 +139,6 @@
         @save-desc="onSavePhotoDesc"
         @delete-photo="onDeletePhoto"
       />
-      <!-- 分享海报弹窗 -->
-    <PosterModal v-if="posterVisible" @close="posterVisible = false" />
 
     <ToastMessage />
       <UserLogin v-if="needLogin" @logged-in="onLoggedIn" />
@@ -134,9 +150,10 @@
 import { ref, computed, provide, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import exifr from 'exifr'
 import {
-  uploadPhoto, hasToken, setNeedLoginListener, fetchIpLocation,
+  createPhotoMeta, hasToken, setNeedLoginListener, fetchIpLocation,
   fetchAppVersion, getCurrentNickname
 } from './api/index.js'
+import { saveLocalPhoto } from './utils/photoStore.js'
 import { wgs84ToGcj02 } from './utils/coord.js'
 import {
   hasCapacitor, takePhoto, pickFromGallery, getCurrentPosition,
@@ -150,7 +167,6 @@ import SpotPanel from './components/SpotPanel.vue'
 import PhotoLightbox from './components/PhotoLightbox.vue'
 import UploadPickPanel from './components/UploadPickPanel.vue'
 import SpotDetailPopup from './components/SpotDetailPopup.vue'
-import PosterModal from './components/PosterModal.vue'
 import AlbumView from './components/AlbumView.vue'
 import ProfileView from './components/ProfileView.vue'
 import PrivacyConsent from './components/PrivacyConsent.vue'
@@ -243,6 +259,9 @@ const popupPhotos = computed(() => {
   if (!popupSpot.value) return []
   return photosStore.photosBySpot.value[popupSpot.value.id] || []
 })
+
+// 全部照片数（相册标签角标）
+const totalPhotos = computed(() => photosStore.allPhotos.value.length)
 
 // ===== 当前点位照片 =====
 const currentPhotos = computed(() => {
@@ -489,17 +508,17 @@ function onSearchOwnPhoto(photo) {
 }
 
 // ===== 上传入口：底部中间蓝色加号 → 拍照 / 从相册选择 =====
+const HINT_KEY = 'map_album_upload_hint_v1'
 const sheetOpen = ref(false)
 
-// ===== 分享海报（两种风格可选） =====
-const posterVisible = ref(false)
-function openPoster() {
-  if (!spotsStore.spots.value.length) {
-    showToast('先上传照片，生成你的第一张海报')
-    return
+function openSheet() {
+  sheetOpen.value = true
+  if (!localStorage.getItem(HINT_KEY)) {
+    localStorage.setItem(HINT_KEY, '1')
+    setTimeout(() => showToast('添加后可拖动地图上的蓝色标记校准位置'), 400)
   }
-  posterVisible.value = true
 }
+
 
 async function onTakePhoto() {
   sheetOpen.value = false
@@ -660,50 +679,61 @@ async function onUploadConfirm(description) {
   if (pickBusy.value || !currentFile.value) return
   pickBusy.value = true
   try {
-    const coord = { ...pickCoord.value }
-    if (isOffline.value) throw new Error('当前无网络')
-    const spot = await ensureSpotAt(coord)
-    // 压缩（先解析过 EXIF 元数据，压缩丢失的 GPS/时间由参数显式携带）
-    const compressed = await compressImage(currentFile.value)
-    await uploadPhoto(spot.id, compressed, description || '', currentMeta.value.shotTime, currentMeta.value.device)
-    await photosStore.loadAllPhotos()
-    spotsStore.renderAllMarkers()
-    showToast('上传成功', 'success')
-    track('upload_success')
-
+    // 1. 压缩原图 + 生成缩略图（EXIF 元数据已在选图时解析，随参数显式携带）
+    const full = await compressImage(currentFile.value, 2048, 0.85)
+    const thumb = await compressImage(currentFile.value, 256, 0.72)
+    // 2. 图片只存设备本地（不传服务器，离线也可保存）
+    const loc = await saveLocalPhoto(full, thumb)
+    // 3. 远程只登记元数据（本地路径 + 备注 + 拍摄信息）；失败进待同步队列
+    let spotForView = null
+    try {
+      if (isOffline.value) throw new Error('当前无网络')
+      const spot = await ensureSpotAt({ ...pickCoord.value })
+      spotForView = spot
+      await createPhotoMeta({
+        spotId: spot.id,
+        description: description || '',
+        shotTime: currentMeta.value.shotTime || null,
+        device: currentMeta.value.device || null,
+        localPath: loc.localPath,
+        localThumbPath: loc.localThumbPath
+      })
+      await photosStore.loadAllPhotos()
+      spotsStore.renderAllMarkers()
+      showToast('已保存', 'success')
+      track('upload_success')
+    } catch (e) {
+      const saved = await addPending({
+        id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        meta: {
+          ...pickCoord.value,
+          desc: description || '',
+          shotTime: currentMeta.value.shotTime,
+          device: currentMeta.value.device,
+          localPath: loc.localPath,
+          localThumbPath: loc.localThumbPath
+        }
+      })
+      if (saved) {
+        showToast('已存到本地，联网后自动同步记录', 'success')
+        track('upload_pending', e?.message || '')
+      } else {
+        showToast('保存失败: ' + (e?.message || e), 'error')
+        track('upload_fail', e?.message || '')
+      }
+    }
     if (uploadQueue.length > 0) {
       await nextUploadFile(true)
     } else {
-      const s = spotsStore.spots.value.find(x => x.id === spot.id)
-      if (s && map.value) {
-        map.value.setCenter([s.lng, s.lat])
+      if (spotForView && map.value) {
+        map.value.setCenter([spotForView.lng, spotForView.lat])
         map.value.setZoom(16)
       }
       finishPick()
     }
   } catch (e) {
-    // 失败/离线 → 持久化待上传队列（重试/断网补传）
-    let saved = false
-    try {
-      saved = await addPending({
-        id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-        blob: currentFile.value,
-        name: currentFile.value.name,
-        meta: {
-          ...pickCoord.value,
-          desc: description || '',
-          shotTime: currentMeta.value.shotTime,
-          device: currentMeta.value.device
-        }
-      })
-    } catch (e2) { /* ignore */ }
-    if (saved) {
-      showToast('已保存到待上传，网络恢复后自动补传', 'success')
-      track('upload_pending', e?.message || '')
-    } else {
-      showToast('上传失败: ' + (e?.message || e), 'error')
-      track('upload_fail', e?.message || '')
-    }
+    showToast('保存失败: ' + (e?.message || e), 'error')
+    track('upload_fail', e?.message || '')
     if (uploadQueue.length > 0) {
       await nextUploadFile(true)
     } else {
@@ -752,9 +782,25 @@ async function resumePending() {
     for (const item of items) {
       if (isOffline.value) break
       try {
+        // 旧版本队列的 blob 记录：先补存本地再登记
+        let localPath = item.meta && item.meta.localPath
+        let localThumbPath = item.meta && item.meta.localThumbPath
+        if (!localPath && item.blob) {
+          const thumb = await compressImage(item.blob, 256, 0.72)
+          const loc = await saveLocalPhoto(item.blob, thumb)
+          localPath = loc.localPath
+          localThumbPath = loc.localThumbPath
+        }
+        if (!localPath) { await removePending(item.id); continue }
         const spot = await ensureSpotAt(item.meta)
-        const file = new File([item.blob], item.name || 'photo.jpg', { type: item.blob.type || 'image/jpeg' })
-        await uploadPhoto(spot.id, file, item.meta.desc || '', item.meta.shotTime, item.meta.device)
+        await createPhotoMeta({
+          spotId: spot.id,
+          description: item.meta.desc || '',
+          shotTime: item.meta.shotTime || null,
+          device: item.meta.device || null,
+          localPath,
+          localThumbPath
+        })
         await removePending(item.id)
         ok++
       } catch (e) { /* 保留队列下次再试 */ }
@@ -762,10 +808,10 @@ async function resumePending() {
     if (ok > 0) {
       await photosStore.loadAllPhotos()
       spotsStore.renderAllMarkers()
-      showToast(`已补传 ${ok} 张照片`, 'success')
+      showToast(`已同步 ${ok} 张照片记录`, 'success')
       track('upload_resume', String(ok))
     } else if (items.length > 0) {
-      showToast('补传未完成，稍后再试')
+      showToast('同步未完成，稍后再试')
     }
   } finally {
     resuming.value = false
@@ -913,7 +959,8 @@ async function onSpotDeleted(id) {
 
 async function onPhotoUpload(files, spotId) {
   try {
-    const ok = await photosStore.upload(files, spotId)
+    const spot = spotsStore.spots.value.find(sp => sp.id === spotId) || { id: spotId }
+    const ok = await photosStore.upload(files, spot)
     showToast(`成功上传 ${ok.length} 张照片`, 'success')
     spotsStore.updateMarker(currentSpot.value)
     if (currentSpot.value) {
@@ -992,6 +1039,19 @@ function onKeyDown(e) {
   }
 }
 
+/** 安卓系统返回键/手势：逐层关闭浮层，再切回地图，地图无浮层则退出 */
+function onAndroidBack(CapApp) {
+  if (updateInfo.value) { updateInfo.value = null; return }
+  if (sheetOpen.value) { sheetOpen.value = false; return }
+  if (popupSpot.value) { popupSpot.value = null; return }
+  if (lightboxVisible.value) { lightboxVisible.value = false; return }
+  if (pickVisible.value) { finishPick(); showToast('已取消上传'); return }
+  if (panelVisible.value) { closePanel(); return }
+  if (spotsStore.isCreating.value) { spotsStore.cancelCreateMode(); showToast('已退出创建模式'); return }
+  if (activeView.value !== 'map') { switchView('map'); return }
+  CapApp.exitApp()
+}
+
 // ===== 生命周期 =====
 onMounted(() => {
   document.addEventListener('keydown', onKeyDown)
@@ -1005,6 +1065,11 @@ onMounted(() => {
     }
   })
   if (hasCapacitor() && privacyReady.value) checkUpdate(false)
+  if (hasCapacitor()) {
+    import('@capacitor/app').then(({ App: CapApp }) => {
+      CapApp.addListener('backButton', () => onAndroidBack(CapApp))
+    }).catch(() => {})
+  }
 })
 onBeforeUnmount(() => document.removeEventListener('keydown', onKeyDown))
 </script>
@@ -1023,24 +1088,36 @@ html, body, #app {
 .app-root { width: 100%; height: 100%; position: relative; }
 .map-host { position: absolute; inset: 0; }
 
-/* ===== 视图切换（左下角） ===== */
-.view-switcher {
-  position: fixed;
-  left: 16px;
-  bottom: max(24px, env(safe-area-inset-bottom));
-  z-index: 140;
-  display: flex; flex-direction: column; gap: 10px;
+/* ===== 底部标签栏（地图 / 相册 / 我的） ===== */
+.tab-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 150;
+  display: flex;
+  background: rgba(255,255,255,0.97);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-top: 1px solid #eef1f6;
+  padding-bottom: env(safe-area-inset-bottom);
 }
-.view-switcher button {
-  width: 48px; height: 48px; border-radius: 50%;
-  background: rgba(255,255,255,0.95); border: none;
-  box-shadow: 0 3px 12px rgba(0,0,0,0.18);
-  font-size: 20px; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
+.tab-item {
+  flex: 1; border: none; background: none; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  padding: 7px 0 6px; min-height: 56px; position: relative;
+  font-size: 11px; color: #8a97a8;
   -webkit-tap-highlight-color: transparent;
-  transition: transform 0.15s;
+  transition: color 0.15s;
 }
-.view-switcher button:active { transform: scale(0.92); }
+.tab-item.active { color: #1a73e8; font-weight: 600; }
+.tab-icon { font-size: 22px; line-height: 1; filter: grayscale(1) opacity(0.5); transition: filter 0.15s, transform 0.15s; }
+.tab-item.active .tab-icon { filter: none; transform: translateY(-1px) scale(1.05); }
+.tab-badge {
+  position: absolute; top: 4px; left: calc(50% + 9px);
+  background: #1a73e8; color: #fff;
+  font-size: 9px; line-height: 14px; min-width: 14px;
+  border-radius: 8px; padding: 0 4px;
+  pointer-events: none;
+}
+/* 高德 logo/版权抬到底部标签栏之上 */
+.amap-logo, .amap-copyright { bottom: calc(58px + env(safe-area-inset-bottom, 0px)) !important; }
 
 /* ===== 离线 / 待上传横幅 ===== */
 .offline-banner {
@@ -1054,7 +1131,7 @@ html, body, #app {
 }
 .pending-banner {
   position: fixed;
-  bottom: calc(max(24px, env(safe-area-inset-bottom)) + 76px);
+  bottom: calc(140px + env(safe-area-inset-bottom, 0px));
   left: 50%; transform: translateX(-50%);
   z-index: 140;
   background: rgba(255,255,255,0.97); color: #333;
@@ -1070,7 +1147,7 @@ html, body, #app {
 /* ===== 底部中间上传按钮 ===== */
 .upload-fab {
   position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: max(24px, env(safe-area-inset-bottom));
+  bottom: calc(70px + env(safe-area-inset-bottom, 0px));
   z-index: 150;
   width: 60px; height: 60px; border-radius: 50%;
   background: #1a73e8; color: #fff;
@@ -1086,21 +1163,6 @@ html, body, #app {
 .upload-fab:hover { transform: translateX(-50%) scale(1.08); box-shadow: 0 8px 24px rgba(26,115,232,0.6); }
 .upload-fab:active { transform: translateX(-50%) scale(0.94); }
 
-/* ===== 海报入口（加号左侧） ===== */
-.poster-fab {
-  position: fixed; left: 50%; transform: translateX(-68px);
-  bottom: max(30px, calc(env(safe-area-inset-bottom) + 6px));
-  z-index: 150;
-  width: 48px; height: 48px; border-radius: 50%;
-  background: rgba(255,255,255,0.95); color: #1a73e8;
-  border: 1.5px solid #dfe6ef; cursor: pointer;
-  font-size: 22px;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.12);
-  display: flex; align-items: center; justify-content: center;
-  -webkit-tap-highlight-color: transparent;
-}
-.poster-fab:hover { transform: translateX(-68px) scale(1.06); }
-.poster-fab:active { transform: translateX(-68px) scale(0.94); }
 
 /* ===== 更新弹窗 ===== */
 .upd-mask {
@@ -1145,21 +1207,37 @@ html, body, #app {
   transform: translate(-50%, 110%);
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
-  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
 }
 .action-sheet.open { transform: translate(-50%, 0); pointer-events: auto; }
+.sheet-head {
+  background: #fff; border-radius: 14px 14px 0 0;
+  padding: 15px 18px 11px;
+  display: flex; flex-direction: column; gap: 3px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.sheet-head b { font-size: 16px; color: #222; }
+.sheet-head span { font-size: 12px; color: #98a4b3; }
 .sheet-item {
-  display: block; width: 100%;
-  padding: 16px; min-height: 54px;
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 13px 18px; min-height: 62px;
   border: none; background: #fff; cursor: pointer;
-  font-size: 16px; text-align: center; color: #222;
+  text-align: left; color: #222;
   -webkit-tap-highlight-color: transparent;
 }
 .sheet-item:active { background: #f5f8fc; }
-.sheet-item + .sheet-item { border-top: 1px solid #f0f0f0; }
-.sheet-item:first-child { border-radius: 14px 14px 0 0; }
+.sheet-item + .sheet-item { border-top: 1px solid #f5f6f8; }
+.sheet-emoji {
+  width: 42px; height: 42px; border-radius: 12px;
+  background: #eaf2ff; font-size: 20px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.sheet-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sheet-text b { font-size: 15px; font-weight: 600; }
+.sheet-text small { font-size: 12px; color: #98a4b3; }
 .sheet-item.cancel {
-  margin-top: 8px; border-radius: 14px;
-  color: #8a97a8; font-weight: 500;
+  margin-top: 8px; border-radius: 14px; min-height: 50px;
+  justify-content: center; color: #8a97a8; font-weight: 500;
 }
 </style>

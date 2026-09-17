@@ -233,15 +233,6 @@ export async function apiGetPublic(url) {
   return data.data
 }
 
-export function apiUpload(spotId, file, description = '', shotTime, device) {
-  const fd = new FormData()
-  fd.append('file', file)
-  fd.append('spotId', String(spotId))
-  if (description) fd.append('description', description)
-  if (shotTime) fd.append('shotTime', shotTime)
-  if (device) fd.append('device', device)
-  return request('/photos', { method: 'POST', body: fd })
-}
 
 // ===== 具体业务 API =====
 
@@ -259,7 +250,7 @@ export function deleteSpot(id) { return apiDelete('/spots/' + id) }
 // 照片
 export function fetchAllPhotos() { return apiGet('/photos/mine') }
 export function fetchPhotosBySpot(spotId) { return apiGet('/photos/spot/' + spotId) }
-export function uploadPhoto(spotId, file, desc, shotTime, device) { return apiUpload(spotId, file, desc, shotTime, device) }
+export function createPhotoMeta(body) { return apiPost('/photos', body) }
 export function deletePhoto(id) { return apiDelete('/photos/' + id) }
 export function updatePhotoDescription(id, description) { return apiPut('/photos', { id, description }) }
 

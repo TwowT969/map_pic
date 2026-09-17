@@ -21,6 +21,8 @@ public class PhotoRespVO implements Serializable {
     private String ssoUserId;
     private String url;
     private String thumbUrl;
+    private String localPath;
+    private String localThumbPath;
     private Integer width;
     private Integer height;
     private Long sizeBytes;

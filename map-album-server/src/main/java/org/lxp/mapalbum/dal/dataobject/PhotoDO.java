@@ -46,8 +46,16 @@ public class PhotoDO extends BaseDO {
     /** OSS 原图 object key（读取时签名下发） */
     private String url;
 
-    /** 缩略图 object key（读取时签名下发） */
+    /** 缩略图 object key（读取时签名下发；本地化后新记录为空） */
     private String thumbUrl;
+
+    // ===== 本地存储（图片文件只存设备本地，远程仅登记元数据） =====
+
+    /** 设备本地原图路径（Android: External/album/xx.jpg；H5: IndexedDB key） */
+    private String localPath;
+
+    /** 设备本地缩略图路径 */
+    private String localThumbPath;
 
     // ===== 图片元数据（EXIF + OSS 回写） =====
 

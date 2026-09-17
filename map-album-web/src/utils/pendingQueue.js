@@ -12,11 +12,15 @@ function openDb() {
   if (_dbPromise) return _dbPromise
   _dbPromise = new Promise((resolve, reject) => {
     if (!('indexedDB' in window)) { reject(new Error('indexedDB 不可用')); return }
-    const req = indexedDB.open(DB_NAME, 1)
+    // v2：新增 local_photos（与 photoStore 同库共用）
+    const req = indexedDB.open(DB_NAME, 2)
     req.onupgradeneeded = () => {
       const db = req.result
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: 'id' })
+      if (!db.objectStoreNames.contains('pending_uploads')) {
+        db.createObjectStore('pending_uploads', { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains('local_photos')) {
+        db.createObjectStore('local_photos', { keyPath: 'key' })
       }
     }
     req.onsuccess = () => resolve(req.result)

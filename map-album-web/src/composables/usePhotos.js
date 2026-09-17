@@ -1,79 +1,129 @@
-import { ref, computed } from 'vue'
+/**
+ * 照片状态与操作（v1.2.0 本地化存储）：
+ * 图片文件只存设备本地（photoStore），远程仅登记元数据；
+ * 旧版本照片（有 url/thumbUrl）继续走远程地址展示。
+ */
+import { computed, ref } from 'vue'
 import {
   fetchAllPhotos, fetchPhotosBySpot,
-  uploadPhoto as apiUpload, deletePhoto as apiDelete,
+  createPhotoMeta, deletePhoto as apiDelete,
   updatePhotoDescription as apiUpdateDesc, fileUrl
 } from '../api/index.js'
+import { compressImage } from '../utils/capacitor.js'
+import { saveLocalPhoto, deleteLocalPhoto, photoLocalSrc } from '../utils/photoStore.js'
+import { addPending } from '../utils/pendingQueue.js'
 
-/** 照片时间：优先拍摄时间（EXIF），回退上传时间 */
 export function photoTimeOf(p) {
-  const t = p && (p.shotTime || p.createTime)
-  const d = t ? new Date(t) : null
-  return d && !isNaN(d.getTime()) ? d.getTime() : 0
+  const t = p.shotTime || p.createTime
+  return t ? (new Date(t).getTime() || 0) : 0
+}
+
+/** 给照片对象解析显示资源：本地文件优先，旧数据回退远程 URL */
+async function resolvePhotoSrcs(list) {
+  for (const p of (list || [])) {
+    if (p.thumbSrc || p.src) continue
+    if (p.localPath || p.localThumbPath) {
+      try {
+        p.thumbSrc = await photoLocalSrc(p.localThumbPath || p.localPath)
+        p.src = await photoLocalSrc(p.localPath || p.localThumbPath)
+      } catch (e) { /* 本地读取失败 → 走远程兜底 */ }
+    }
+    if (!p.thumbSrc && (p.thumbUrl || p.url)) {
+      p.thumbSrc = fileUrl(p.thumbUrl || p.url)
+      p.src = fileUrl(p.url || p.thumbUrl || '')
+    }
+  }
 }
 
 export function usePhotos() {
-  const photosBySpot = ref({})  // { spotId: Photo[] }
-  const allPhotos = ref([])     // 扁平全量（按拍摄时间倒序），相册/统计用
+  const photosBySpot = ref({})
+  const allPhotos = ref([])
 
   const latestPhotoMap = computed(() => {
     const map = {}
-    Object.entries(photosBySpot.value).forEach(([spotId, list]) => {
-      if (list.length > 0) {
-        map[spotId] = list.reduce((a, b) => (photoTimeOf(a) >= photoTimeOf(b) ? a : b))
-      }
+    allPhotos.value.forEach(p => {
+      const cur = map[p.spotId]
+      if (!cur || photoTimeOf(p) > photoTimeOf(cur)) map[p.spotId] = p
     })
     return map
   })
 
-  function getLatestPhoto(spotId) {
-    return latestPhotoMap.value[spotId] || null
-  }
-
-  function sortByTime(photos) {
-    return (photos || []).slice().sort((a, b) => photoTimeOf(b) - photoTimeOf(a))
-  }
-
   async function loadAllPhotos() {
     const data = await fetchAllPhotos()
+    await resolvePhotoSrcs(data || [])
+    allPhotos.value = data || []
     const map = {}
-    ;(data || []).forEach(p => {
-      if (!map[p.spotId]) map[p.spotId] = []
-      map[p.spotId].push(p)
-    })
-    Object.keys(map).forEach(k => { map[k] = sortByTime(map[k]) })
+    for (const p of allPhotos.value) {
+      (map[p.spotId] = map[p.spotId] || []).push(p)
+    }
     photosBySpot.value = map
-    allPhotos.value = sortByTime(data)
-    return data
   }
 
   async function loadPhotos(spotId) {
     const data = await fetchPhotosBySpot(spotId)
-    const sorted = sortByTime(data)
-    photosBySpot.value = {
-      ...photosBySpot.value,
-      [spotId]: sorted
-    }
-    // 同步扁平列表中该点位的部分
-    allPhotos.value = sortByTime(
-      allPhotos.value.filter(p => p.spotId !== Number(spotId) && p.spotId !== spotId).concat(sorted)
-    )
-    return data
+    await resolvePhotoSrcs(data || [])
+    photosBySpot.value = { ...photosBySpot.value, [spotId]: data || [] }
+    const known = new Set(allPhotos.value.map(p => p.id))
+    allPhotos.value = [...allPhotos.value, ...(data || []).filter(p => !known.has(p.id))]
   }
 
-  async function upload(files, spotId) {
+  /**
+   * 上传（本地化）：压缩原图 + 生成缩略图 → 存设备本地 → 远程登记元数据。
+   * 元数据同步失败时照片仍在本地，并进入待同步队列（联网后自动补登）。
+   */
+  async function upload(files, spot) {
+    const isObj = spot && typeof spot === 'object'
+    const spotId = isObj ? spot.id : spot
     const results = []
     for (const file of files) {
-      if (!file.type.startsWith('image/')) continue
-      const photo = await apiUpload(spotId, file, '')
-      results.push(photo)
+      if (!file || !file.type || !file.type.startsWith('image/')) continue
+      const full = await compressImage(file, 2048, 0.85)
+      const thumb = await compressImage(file, 256, 0.72)
+      const loc = await saveLocalPhoto(full, thumb)
+      try {
+        const photo = await createPhotoMeta({
+          spotId,
+          description: '',
+          shotTime: null,
+          device: null,
+          localPath: loc.localPath,
+          localThumbPath: loc.localThumbPath
+        })
+        results.push(photo)
+      } catch (e) {
+        await addPending({
+          id: 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          meta: {
+            lng: isObj ? spot.lng : null,
+            lat: isObj ? spot.lat : null,
+            address: isObj ? (spot.address || '') : '',
+            province: isObj ? (spot.province || '') : '',
+            city: isObj ? (spot.city || '') : '',
+            district: isObj ? (spot.district || '') : '',
+            desc: '',
+            shotTime: '',
+            device: '',
+            localPath: loc.localPath,
+            localThumbPath: loc.localThumbPath
+          }
+        })
+        throw new Error('照片已存本地，网络恢复后自动同步记录')
+      }
     }
-    await loadPhotos(spotId)
+    if (results.length > 0) {
+      await loadPhotos(spotId)
+    }
     return results
   }
 
   async function remove(photoId, spotId) {
+    const photo = allPhotos.value.find(p => p.id === photoId) ||
+      (photosBySpot.value[spotId] || []).find(p => p.id === photoId)
     await apiDelete(photoId)
+    if (photo) {
+      // 同步清理设备本地图片文件（尽力而为）
+      deleteLocalPhoto(photo).catch(() => {})
+    }
     if (photosBySpot.value[spotId]) {
       photosBySpot.value = {
         ...photosBySpot.value,
@@ -83,7 +133,6 @@ export function usePhotos() {
     allPhotos.value = allPhotos.value.filter(p => p.id !== photoId)
   }
 
-  /** 修改照片备注（PUT /photos） */
   async function updateDescription(photoId, description) {
     await apiUpdateDesc(photoId, description)
     const patch = list => list.map(p => (p.id === photoId ? { ...p, description } : p))
@@ -91,6 +140,10 @@ export function usePhotos() {
     Object.keys(map).forEach(k => { map[k] = patch(map[k]) })
     photosBySpot.value = map
     allPhotos.value = patch(allPhotos.value)
+  }
+
+  function getLatestPhoto(spotId) {
+    return latestPhotoMap.value[spotId] || null
   }
 
   function photoUrl(url) {

@@ -33,7 +33,9 @@ export async function takePhoto() {
       quality: 90,
       allowEditing: false,
       source: CameraSource.Camera,
-      resultType: 'base64'
+      resultType: 'base64',
+      // 拍摄的原图同时保存到系统相册（本地化存储：相册即留存入口）
+      saveToGallery: true
     })
     const base64 = photo.base64String
     const mime = `image/${photo.format || 'jpeg'}`
@@ -68,6 +70,8 @@ export async function takePhoto() {
 export async function pickFromGallery(multiple = true) {
   if (hasCapacitor()) {
     const { Camera, CameraSource } = await import('@capacitor/camera')
+    // 申请相册读取权限（Android 13+ READ_MEDIA_IMAGES；已授权时静默通过）
+    try { await Camera.requestPermissions({ permissions: ['photos'] }) } catch (e) { /* 系统照片选择器无权限也可用 */ }
     try {
       const result = await Camera.pickImages({
         quality: 90,

@@ -1,14 +1,13 @@
 <template>
   <div class="photo-grid">
     <div v-for="photo in photos" :key="photo.id" class="photo-item" @click="$emit('preview', photo)">
-      <img :src="fileUrl(photo.thumbUrl || photo.url)" loading="lazy" @error="onImgError" />
+      <img :src="photo.thumbSrc || photo.src || ''" loading="lazy" @error="onImgError" />
       <button class="photo-delete" @click.stop="$emit('delete', photo.id)" title="删除此照片">✕</button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { fileUrl } from '../api/index.js'
 
 defineProps({ photos: { type: Array, default: () => [] } })
 defineEmits(['delete', 'preview'])

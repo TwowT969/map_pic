@@ -37,7 +37,6 @@
 
 <script setup>
 import { computed, inject, ref } from 'vue'
-import { fileUrl } from '../api/index.js'
 
 const props = defineProps({
   spot: { type: Object, required: true },
@@ -52,7 +51,7 @@ const tagList = computed(() =>
   (props.spot?.tags || '').split(/[,，、]/).map(t => t.trim()).filter(Boolean)
 )
 
-function imgOf(p) { return fileUrl(p.thumbUrl || p.url) }
+function imgOf(p) { return p.thumbSrc || p.src || '' }
 function onImgError(e) { e.target.style.display = 'none' }
 
 /** 点击图片 → 大图浏览（可缩放、改备注、删除） */

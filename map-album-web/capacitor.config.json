@@ -5,14 +5,19 @@
   "server": {
     "androidScheme": "https",
     "iosScheme": "https",
-    "allowNavigation": ["*.amap.com", "*.alicdn.com", "*.aliyuncs.com"],
+    "allowNavigation": [
+      "*.amap.com",
+      "*.alicdn.com",
+      "*.aliyuncs.com"
+    ],
     "hostname": "mapalbum.app",
     "androidUserAgent": "Mozilla/5.0 MapAlbumApp"
   },
   "android": {
     "allowMixedContent": true,
     "captureInput": true,
-    "webContentsDebuggingEnabled": true
+    "webContentsDebuggingEnabled": true,
+    "adjustMarginsForEdgeToEdge": "force"
   },
   "ios": {
     "contentInset": "automatic",
@@ -24,7 +29,9 @@
       "saveToGallery": false
     },
     "Geolocation": {
-      "permissions": ["location"]
+      "permissions": [
+        "location"
+      ]
     },
     "Keyboard": {
       "resize": "body",

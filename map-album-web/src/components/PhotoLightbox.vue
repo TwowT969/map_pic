@@ -89,14 +89,14 @@ const currentSrc = computed(() => {
   const photo = props.photos[props.index]
   if (!photo) return ''
   if (typeof photo === 'string') return fileUrl(photo)
-  return fileUrl(photo.url || photo.thumbUrl || '')
+  return photo.src || photo.thumbSrc || fileUrl(photo.url || photo.thumbUrl || '')
 })
 
 // 缩略图 URL
 function thumbnailOf(photo) {
   if (!photo) return ''
   if (typeof photo === 'string') return fileUrl(photo)
-  return fileUrl(photo.thumbUrl || photo.url || '')
+  return photo.thumbSrc || photo.src || fileUrl(photo.thumbUrl || photo.url || '')
 }
 
 const total = computed(() => props.photos.length)

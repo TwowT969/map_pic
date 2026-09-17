@@ -12,9 +12,9 @@ export function createMarkerElement(spot, photo) {
   const photoWrap = document.createElement('div')
   photoWrap.className = 'marker-photo-wrap'
 
-  if (photo && (photo.thumbUrl || photo.url)) {
+  if (photo && (photo.thumbSrc || photo.src)) {
     const img = document.createElement('img')
-    img.src = fileUrl(photo.thumbUrl || photo.url)
+    img.src = photo.thumbSrc || photo.src || ''
     img.style.cssText = 'width:100%;height:100%;object-fit:cover'
     img.onerror = () => {
       img.style.display = 'none'

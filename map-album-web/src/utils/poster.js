@@ -101,6 +101,10 @@ function withTimeout(p, ms) {
 
 async function loadThumb(url) {
   try {
+    // 本地资源（blob:/data:/capacitor file）直接加载，不走 CapacitorHttp
+    if (/^(blob:|data:|file:)/.test(url) || url.indexOf('_capacitor_file_') >= 0) {
+      return await imgFromSrc(url)
+    }
     if (hasCapacitor()) {
       const { CapacitorHttp } = await import('@capacitor/core')
       const res = await CapacitorHttp.get({ url, responseType: 'BASE64', connectTimeout: 8000, readTimeout: 8000 })
@@ -396,7 +400,7 @@ function drawFilmTile(ctx, t) {
   ctx.restore()
 }
 
-function drawWallPoster(ctx, data, tiles, qrImg) {
+function drawWallPoster(ctx, data, tiles, qrImg, variant) {
   ctx.fillStyle = '#faf6ee'
   ctx.fillRect(0, 0, W, H)
 
@@ -461,17 +465,17 @@ export async function renderPoster(style, spots, photosBySpot, variant = 0) {
     const thumbs = await Promise.all(list.map(s => {
       const p = (photosBySpot[s.id] || [])[0]
       if (!p) return Promise.resolve(null)
-      return withTimeout(loadThumb(fileUrl(p.thumbUrl || p.url)), 8000).catch(() => null)
+      return withTimeout(loadThumb(p.thumbSrc || p.src || fileUrl(p.thumbUrl || p.url)), 8000).catch(() => null)
     }))
     drawMapPoster(ctx, data, variant, thumbs, qrImg)
   } else {
     const tiles = collectPhotoTiles(data, photosBySpot)
     await Promise.all(tiles.map(t =>
-      withTimeout(loadThumb(fileUrl(t.p.thumbUrl || t.p.url)), 8000)
+      withTimeout(loadThumb(t.p.thumbSrc || t.p.src || fileUrl(t.p.thumbUrl || t.p.url)), 8000)
         .then(im => { t.img = im })
         .catch(() => {})
     ))
-    drawWallPoster(ctx, data, tiles, qrImg)
+    drawWallPoster(ctx, data, tiles, qrImg, variant)
   }
   return canvas
 }

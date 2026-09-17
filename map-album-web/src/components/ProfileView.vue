@@ -1,7 +1,6 @@
 <template>
   <div class="profile-view">
     <div class="pv-header">
-      <button class="pv-back" @click="$emit('back')">🗺️ 地图</button>
       <div class="pv-title">我的</div>
     </div>
     <div class="pv-body">
@@ -44,6 +43,9 @@
 
       <!-- 功能项 -->
       <div class="pv-card pv-menu">
+        <button class="pv-menu-item" @click="openPoster">
+          <span>🎨 生成分享海报</span><span class="pv-menu-extra">生活地图 / 胶片墙 ›</span>
+        </button>
         <button class="pv-menu-item" @click="$emit('check-update')">
           <span>🔄 检查更新</span><span class="pv-menu-extra">当前 v{{ versionName }}</span>
         </button>
@@ -55,18 +57,22 @@
         </button>
       </div>
     </div>
+
+    <!-- 分享海报弹窗（两种风格可选） -->
+    <PosterModal v-if="posterVisible" @close="posterVisible = false" />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, inject, onMounted, onBeforeUnmount } from 'vue'
 import { getApiBase, updateUserProfile, getCurrentNickname, logout } from '../api/index.js'
+import PosterModal from './PosterModal.vue'
 
 const props = defineProps({
   pendingCount: { type: Number, default: 0 }
 })
 
-const emit = defineEmits(['back', 'check-update'])
+defineEmits(['check-update'])
 
 const showToast = inject('showToast')
 const spotsStore = inject('spotsStore')
@@ -83,6 +89,16 @@ const account = computed(() => {
 })
 
 const versionName = import.meta.env.VITE_APP_VERSION_NAME || import.meta.env.VITE_APP_VERSION_CODE || '1.0'
+
+// ===== 分享海报（两种风格可选） =====
+const posterVisible = ref(false)
+function openPoster() {
+  if (!photosStore.allPhotos.value.length) {
+    showToast('先上传照片，生成你的第一张海报')
+    return
+  }
+  posterVisible.value = true
+}
 
 const stats = computed(() => {
   const spots = spotsStore.spots.value || []
@@ -148,18 +164,11 @@ onBeforeUnmount(() => window.removeEventListener('resize', detectMobile))
   background: #fff; border-bottom: 1px solid #eef1f6;
   flex-shrink: 0;
 }
-.pv-back {
-  border: none; background: #f2f4f7; color: #333;
-  border-radius: 10px; padding: 8px 14px;
-  font-size: 14px; cursor: pointer; min-height: 40px;
-  -webkit-tap-highlight-color: transparent;
-}
-.pv-back:active { background: #e7eaf0; }
 .pv-title { font-size: 17px; font-weight: 600; color: #222; }
 
 .pv-body {
   flex: 1; overflow-y: auto;
-  padding: 14px 16px calc(20px + env(safe-area-inset-bottom));
+  padding: 14px 16px calc(84px + env(safe-area-inset-bottom, 0px));
   -webkit-overflow-scrolling: touch;
 }
 

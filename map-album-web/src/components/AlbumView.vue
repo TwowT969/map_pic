@@ -1,7 +1,6 @@
 <template>
   <div class="album-view">
     <div class="av-header">
-      <button class="av-back" @click="$emit('back')">🗺️ 地图</button>
       <div class="av-title">相册 <span class="av-count" v-if="total">共 {{ total }} 张</span></div>
     </div>
     <div class="av-body">
@@ -25,10 +24,7 @@
 
 <script setup>
 import { computed, inject } from 'vue'
-import { fileUrl } from '../api/index.js'
 import { photoTimeOf } from '../composables/usePhotos.js'
-
-defineEmits(['back'])
 
 const photosStore = inject('photosStore')
 const openLightbox = inject('openLightbox', null)
@@ -53,7 +49,7 @@ const months = computed(() => {
     }))
 })
 
-function thumbOf(p) { return fileUrl(p.thumbUrl || p.url) }
+function thumbOf(p) { return p.thumbSrc || p.src || '' }
 function onImgError(e) { e.target.style.display = 'none' }
 
 function dayOf(p) {
@@ -80,18 +76,11 @@ function open(photos, i) {
   background: #fff; border-bottom: 1px solid #eef1f6;
   flex-shrink: 0;
 }
-.av-back {
-  border: none; background: #f2f4f7; color: #333;
-  border-radius: 10px; padding: 8px 14px;
-  font-size: 14px; cursor: pointer; min-height: 40px;
-  -webkit-tap-highlight-color: transparent;
-}
-.av-back:active { background: #e7eaf0; }
 .av-title { font-size: 17px; font-weight: 600; color: #222; }
 .av-count { font-size: 12px; color: #999; font-weight: 400; margin-left: 4px; }
 
 .av-body {
-  flex: 1; overflow-y: auto; padding: 12px 14px calc(20px + env(safe-area-inset-bottom));
+  flex: 1; overflow-y: auto; padding: 12px 14px calc(84px + env(safe-area-inset-bottom, 0px));
   -webkit-overflow-scrolling: touch;
 }
 .av-month { margin-bottom: 18px; }
