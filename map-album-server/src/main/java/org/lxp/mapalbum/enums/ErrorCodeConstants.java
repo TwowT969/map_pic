@@ -21,6 +21,8 @@ public interface ErrorCodeConstants {
     ErrorCode USER_PASSWORD_REQUIRED = new ErrorCode(1005, "请输入密码");
     ErrorCode USER_PASSWORD_WRONG = new ErrorCode(1006, "账号或密码不正确");
     ErrorCode USER_PASSWORD_TOO_SHORT = new ErrorCode(1007, "密码至少 6 位");
+    ErrorCode USER_ACCOUNT_EXISTS = new ErrorCode(1008, "账号已存在，请直接登录");
+    ErrorCode USER_NOT_REGISTERED = new ErrorCode(1009, "账号不存在，请先注册");
 
     // ==================== 点位 2xxx ====================
 

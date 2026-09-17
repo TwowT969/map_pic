@@ -2,6 +2,7 @@ package org.lxp.mapalbum.service.user;
 
 import org.lxp.mapalbum.controller.app.user.vo.UserLoginReqVO;
 import org.lxp.mapalbum.controller.app.user.vo.UserLoginRespVO;
+import org.lxp.mapalbum.controller.app.user.vo.UserRegisterReqVO;
 import org.lxp.mapalbum.controller.app.user.vo.UserRespVO;
 import org.lxp.mapalbum.controller.app.user.vo.UserUpdateReqVO;
 
@@ -20,6 +21,14 @@ public interface UserService {
      * @return 令牌 + 用户信息
      */
     UserLoginRespVO login(UserLoginReqVO reqVO);
+
+    /**
+     * 注册（与登录分离）：账号查重后创建用户并直接签发令牌（注册即登录）。
+     *
+     * @param reqVO 注册请求
+     * @return 令牌 + 用户信息
+     */
+    UserLoginRespVO register(UserRegisterReqVO reqVO);
 
     /**
      * 更新当前登录用户资料（昵称等；userId 以登录态为准）。

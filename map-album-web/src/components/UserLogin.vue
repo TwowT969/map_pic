@@ -13,6 +13,28 @@
         <p class="login-sub">把每一次足迹，落在地图上</p>
       </div>
 
+      <!-- 登录 / 注册 分离切换 -->
+      <div class="mode-tabs" role="tablist">
+        <button
+          class="tab"
+          :class="{ active: mode === 'login' }"
+          type="button"
+          role="tab"
+          :aria-selected="mode === 'login'"
+          @click="switchMode('login')"
+        >登录</button>
+        <button
+          class="tab"
+          :class="{ active: mode === 'register' }"
+          type="button"
+          role="tab"
+          :aria-selected="mode === 'register'"
+          @click="switchMode('register')"
+        >注册</button>
+        <span class="tab-slider" :class="{ right: mode === 'register' }"></span>
+      </div>
+
+      <!-- 账号 -->
       <div class="field" :class="{ focus: focusField === 'account', filled: account }">
         <span class="f-icon">👤</span>
         <input
@@ -28,24 +50,8 @@
         />
       </div>
 
-      <div class="field" :class="{ focus: focusField === 'password', filled: password }">
-        <span class="f-icon">🔒</span>
-        <input
-          v-model="password"
-          :type="showPwd ? 'text' : 'password'"
-          placeholder="密码（至少 6 位）"
-          autocomplete="current-password"
-          maxlength="64"
-          @focus="focusField = 'password'"
-          @blur="focusField = ''"
-          @keyup.enter="submit"
-        />
-        <button class="f-toggle" type="button" tabindex="-1" @click="showPwd = !showPwd">
-          {{ showPwd ? '🙈' : '👁' }}
-        </button>
-      </div>
-
-      <div class="field" :class="{ focus: focusField === 'nickname', filled: nickname }">
+      <!-- 注册：昵称 -->
+      <div v-if="mode === 'register'" class="field" :class="{ focus: focusField === 'nickname', filled: nickname }">
         <span class="f-icon">✏️</span>
         <input
           v-model.trim="nickname"
@@ -59,32 +65,85 @@
         />
       </div>
 
+      <!-- 密码 -->
+      <div class="field" :class="{ focus: focusField === 'password', filled: password }">
+        <span class="f-icon">🔒</span>
+        <input
+          v-model="password"
+          :type="showPwd ? 'text' : 'password'"
+          :placeholder="mode === 'login' ? '密码（至少 6 位）' : '设置密码（至少 6 位）'"
+          :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
+          maxlength="64"
+          @focus="focusField = 'password'"
+          @blur="focusField = ''"
+          @keyup.enter="submit"
+        />
+        <button class="f-toggle" type="button" tabindex="-1" @click="showPwd = !showPwd">
+          {{ showPwd ? '🙈' : '👁' }}
+        </button>
+      </div>
+
+      <!-- 注册：确认密码 -->
+      <div v-if="mode === 'register'" class="field" :class="{ focus: focusField === 'confirm', filled: confirmPwd }">
+        <span class="f-icon">🔑</span>
+        <input
+          v-model="confirmPwd"
+          :type="showPwd ? 'text' : 'password'"
+          placeholder="确认密码"
+          autocomplete="new-password"
+          maxlength="64"
+          @focus="focusField = 'confirm'"
+          @blur="focusField = ''"
+          @keyup.enter="submit"
+        />
+      </div>
+
       <button class="login-btn" :disabled="loading" @click="submit">
         <span v-if="loading" class="spinner" aria-hidden="true"></span>
-        <span>{{ loading ? '登录中…' : '登录 / 注册' }}</span>
+        <span>{{ btnText }}</span>
       </button>
 
       <Transition name="err">
         <p v-if="error" class="login-error">⚠️ {{ error }}</p>
       </Transition>
 
-      <p class="login-tip">新账号首次登录自动注册，密码即初始密码</p>
+      <button class="switch-link" type="button" @click="switchMode(mode === 'login' ? 'register' : 'login')">
+        {{ mode === 'login' ? '没有账号？立即注册' : '已有账号？直接登录' }}
+      </button>
+
+      <p class="login-tip">{{ tipText }}</p>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { loginAccount } from '../api/index.js'
+import { ref, computed } from 'vue'
+import { loginAccount, registerAccount } from '../api/index.js'
 
 const emit = defineEmits(['logged-in'])
+const mode = ref('login') // 'login' | 'register' —— 注册登录彻底分离
 const account = ref('')
 const password = ref('')
+const confirmPwd = ref('')
 const nickname = ref('')
 const showPwd = ref(false)
 const loading = ref(false)
 const error = ref('')
 const focusField = ref('')
+
+const btnText = computed(() => {
+  if (loading.value) return mode.value === 'login' ? '登录中…' : '注册中…'
+  return mode.value === 'login' ? '登 录' : '注册并登录'
+})
+const tipText = computed(() => mode.value === 'login'
+  ? '使用已有账号密码登录，数据与网页端互通'
+  : '注册即创建账号并自动登录')
+
+function switchMode(m) {
+  if (mode.value === m) return
+  mode.value = m
+  error.value = ''
+}
 
 async function submit() {
   if (loading.value) return
@@ -93,13 +152,21 @@ async function submit() {
   if (!/^[\w@.-]{2,32}$/.test(account.value)) { error.value = '账号需为 2-32 位字母 / 数字 / 下划线'; return }
   if (!password.value) { error.value = '请输入密码（至少 6 位）'; return }
   if (password.value.length < 6) { error.value = '密码至少 6 位'; return }
+  if (mode.value === 'register' && password.value !== confirmPwd.value) {
+    error.value = '两次输入的密码不一致'
+    return
+  }
 
   loading.value = true
   try {
-    await loginAccount(account.value, nickname.value, password.value)
+    if (mode.value === 'login') {
+      await loginAccount(account.value, password.value)
+    } else {
+      await registerAccount(account.value, nickname.value, password.value)
+    }
     emit('logged-in')
   } catch (e) {
-    error.value = e.message || '登录失败，请重试'
+    error.value = e.message || (mode.value === 'login' ? '登录失败，请重试' : '注册失败，请重试')
   } finally {
     loading.value = false
   }
@@ -151,7 +218,7 @@ async function submit() {
   max-width: 360px;
   background: rgba(255, 255, 255, 0.98);
   border-radius: 22px;
-  padding: 34px 28px 24px;
+  padding: 30px 28px 22px;
   box-shadow: 0 24px 64px rgba(9, 30, 66, 0.4);
   animation: cardIn 0.45s cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -160,7 +227,7 @@ async function submit() {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-.brand { text-align: center; margin-bottom: 26px; }
+.brand { text-align: center; margin-bottom: 20px; }
 .brand-logo {
   width: 70px; height: 70px;
   margin: 0 auto 14px;
@@ -177,6 +244,44 @@ async function submit() {
   letter-spacing: 2px;
 }
 .login-sub { margin: 0; font-size: 13px; color: #93a3b8; letter-spacing: 0.5px; }
+
+/* ===== 登录 / 注册 分离 Tab ===== */
+.mode-tabs {
+  position: relative;
+  display: flex;
+  background: #eef2f7;
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 18px;
+}
+.mode-tabs .tab {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  height: 40px;
+  border: none;
+  background: transparent;
+  border-radius: 9px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #8a97a8;
+  cursor: pointer;
+  letter-spacing: 4px;
+  transition: color 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+.mode-tabs .tab.active { color: #fff; }
+.tab-slider {
+  position: absolute;
+  top: 4px; left: 4px;
+  width: calc(50% - 4px);
+  height: calc(100% - 8px);
+  background: linear-gradient(90deg, #4a90d9, #2563a8);
+  border-radius: 9px;
+  box-shadow: 0 4px 12px rgba(37, 99, 168, 0.35);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.tab-slider.right { transform: translateX(100%); }
 
 /* 输入框 */
 .field {
@@ -222,7 +327,7 @@ async function submit() {
 }
 .f-toggle:active { opacity: 1; }
 
-/* 登录按钮 + spinner */
+/* 登录/注册按钮 + spinner */
 .login-btn {
   width: 100%;
   height: 50px;
@@ -272,8 +377,25 @@ async function submit() {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* 切换链接 */
+.switch-link {
+  display: block;
+  width: 100%;
+  margin: 14px 0 0;
+  border: none;
+  background: transparent;
+  color: #4a90d9;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: center;
+  cursor: pointer;
+  padding: 6px;
+  -webkit-tap-highlight-color: transparent;
+}
+.switch-link:active { opacity: 0.7; }
+
 .login-tip {
-  margin: 16px 0 0;
+  margin: 8px 0 0;
   font-size: 12px;
   color: #a9b5c4;
   text-align: center;

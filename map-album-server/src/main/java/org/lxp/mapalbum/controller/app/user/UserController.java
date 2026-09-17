@@ -2,6 +2,7 @@ package org.lxp.mapalbum.controller.app.user;
 
 import org.lxp.mapalbum.controller.app.user.vo.UserLoginReqVO;
 import org.lxp.mapalbum.controller.app.user.vo.UserLoginRespVO;
+import org.lxp.mapalbum.controller.app.user.vo.UserRegisterReqVO;
 import org.lxp.mapalbum.controller.app.user.vo.UserRespVO;
 import org.lxp.mapalbum.controller.app.user.vo.UserUpdateReqVO;
 import org.lxp.mapalbum.framework.common.pojo.CommonResult;
@@ -39,6 +40,18 @@ public class UserController {
     @PostMapping("/login")
     public CommonResult<UserLoginRespVO> login(@Validated @RequestBody UserLoginReqVO reqVO) {
         return success(userService.login(reqVO));
+    }
+
+    /**
+     * 注册（与登录分离）：账号查重后创建用户并直接签发令牌（注册即登录）。
+     * 公开接口（无需登录态），在 WebConfig 中排除拦截。
+     *
+     * @param reqVO 注册请求
+     * @return 令牌 + 用户信息
+     */
+    @PostMapping("/register")
+    public CommonResult<UserLoginRespVO> register(@Validated @RequestBody UserRegisterReqVO reqVO) {
+        return success(userService.register(reqVO));
     }
 
     /**

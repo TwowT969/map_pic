@@ -59,7 +59,7 @@ export function fileUrl(url) {
 }
 
 // ===== 登录态管理 =====
-// 全端统一：账号 + 密码显式登录（首次注册即设置密码，≥6 位），无免密通道
+// 全端统一：登录与注册分离 —— 登录仅校验已有账号；新账号走 registerAccount 先注册（≥6 位密码）
 const TOKEN_KEY = 'map_album_token'
 const SSO_KEY = 'map_album_sso_user_id'
 const NAME_KEY = 'map_album_nickname'
@@ -96,7 +96,7 @@ function notifyNeedLogin() {
  * ssoUserId 统一加 app- 前缀；新账号自动注册（密码即初始密码），
  * 老账号若历史无密码，本次所填密码即被设置。同一账号在 App 与网页通用。
  */
-export async function loginAccount(account, nickname, password) {
+export async function loginAccount(account, password) {
   const acc = (account || '').trim()
   if (!acc) throw new Error('请输入账号')
   if (!/^[\w@.-]{2,32}$/.test(acc)) throw new Error('账号需为 2-32 位字母/数字/下划线')
@@ -104,18 +104,41 @@ export async function loginAccount(account, nickname, password) {
   if (!pwd) throw new Error('请输入密码（至少 6 位）')
   if (pwd.length < 6) throw new Error('密码至少 6 位')
   const ssoUserId = 'app-' + acc.toLowerCase()
-  const name = (nickname || '').trim() || acc
   const data = await rawPost('/user/login', {
     ssoProvider: 'dev',
     ssoUserId: ssoUserId,
-    nickname: name,
     password: pwd
   })
   localStorage.setItem(TOKEN_KEY, data.token)
   localStorage.setItem(SSO_KEY, ssoUserId)
-  localStorage.setItem(NAME_KEY, name)
+  localStorage.setItem(NAME_KEY, data.user.nickname || acc)
   currentUserId = data.user.id
-  currentNickname = name
+  currentNickname = data.user.nickname || acc
+  return data.user
+}
+
+/**
+ * 注册（与登录分离）：创建账号并直接登录（后端注册成功即签发令牌）。
+ */
+export async function registerAccount(account, nickname, password) {
+  const acc = (account || '').trim()
+  if (!acc) throw new Error('请输入账号')
+  if (!/^[\w@.-]{2,32}$/.test(acc)) throw new Error('账号需为 2-32 位字母/数字/下划线')
+  const pwd = (password || '').trim()
+  if (!pwd) throw new Error('请输入密码（至少 6 位）')
+  if (pwd.length < 6) throw new Error('密码至少 6 位')
+  const name = (nickname || '').trim() || acc
+  const data = await rawPost('/user/register', {
+    account: acc,
+    nickname: name,
+    password: pwd
+  })
+  const ssoUserId = 'app-' + acc.toLowerCase()
+  localStorage.setItem(TOKEN_KEY, data.token)
+  localStorage.setItem(SSO_KEY, ssoUserId)
+  localStorage.setItem(NAME_KEY, data.user.nickname || name)
+  currentUserId = data.user.id
+  currentNickname = data.user.nickname || name
   return data.user
 }
 

@@ -46,6 +46,10 @@ public class AuthInterceptor implements HandlerInterceptor {
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
             throws Exception {
+        // 0. 预检请求不带业务令牌，直接放行（CORS 响应头由过滤器级 CorsFilter 统一写入）
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            return true;
+        }
         String token = extractToken(request);
         Long userId = token == null ? null : userTokenRedisDAO.getUserIdByToken(token);
 

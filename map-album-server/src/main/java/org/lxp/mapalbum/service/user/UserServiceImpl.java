@@ -3,6 +3,7 @@ package org.lxp.mapalbum.service.user;
 import lombok.extern.slf4j.Slf4j;
 import org.lxp.mapalbum.controller.app.user.vo.UserLoginReqVO;
 import org.lxp.mapalbum.controller.app.user.vo.UserLoginRespVO;
+import org.lxp.mapalbum.controller.app.user.vo.UserRegisterReqVO;
 import org.lxp.mapalbum.controller.app.user.vo.UserRespVO;
 import org.lxp.mapalbum.controller.app.user.vo.UserUpdateReqVO;
 import org.lxp.mapalbum.dal.dataobject.UserDO;
@@ -17,9 +18,11 @@ import javax.annotation.Resource;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
+import static org.lxp.mapalbum.enums.ErrorCodeConstants.USER_ACCOUNT_EXISTS;
 import static org.lxp.mapalbum.enums.ErrorCodeConstants.USER_DISABLED;
 import static org.lxp.mapalbum.enums.ErrorCodeConstants.USER_NOT_EXISTS;
 import static org.lxp.mapalbum.enums.ErrorCodeConstants.USER_PASSWORD_REQUIRED;
+import static org.lxp.mapalbum.enums.ErrorCodeConstants.USER_NOT_REGISTERED;
 import static org.lxp.mapalbum.enums.ErrorCodeConstants.USER_PASSWORD_TOO_SHORT;
 import static org.lxp.mapalbum.enums.ErrorCodeConstants.USER_PASSWORD_WRONG;
 import static org.lxp.mapalbum.framework.common.exception.ServiceExceptionUtil.exception;
@@ -50,17 +53,40 @@ public class UserServiceImpl implements UserService {
         // 1. 查是否已有该 SSO 用户；无则首次注册
         UserDO user = userMapper.selectBySso(reqVO.getSsoUserId(), reqVO.getSsoProvider());
         if (user == null) {
-            user = doRegister(reqVO);
-            log.info("[login][ssoProvider={}, ssoUserId={}] 新用户注册 id={}",
-                    reqVO.getSsoProvider(), reqVO.getSsoUserId(), user.getId());
-        } else {
-            validateStatus(user);
-            validatePassword(user, reqVO);
-            log.info("[login][ssoProvider={}, ssoUserId={}] 已有用户 id={}",
-                    reqVO.getSsoProvider(), reqVO.getSsoUserId(), user.getId());
+            // 注册与登录分离：登录不再隐式注册，未注册账号请走 /user/register
+            throw exception(USER_NOT_REGISTERED);
         }
+        validateStatus(user);
+        validatePassword(user, reqVO);
+        log.info("[login][ssoProvider={}, ssoUserId={}] 已有用户 id={}",
+                reqVO.getSsoProvider(), reqVO.getSsoUserId(), user.getId());
 
         // 2. 签发令牌（UUID 随机值，无状态；有效性由 Redis 会话管理）
+        String token = UUID.randomUUID().toString().replace("-", "");
+        userTokenRedisDAO.create(token, user.getId());
+        return new UserLoginRespVO(token, BeanUtils.toBean(user, UserRespVO.class));
+    }
+
+    /**
+     * 注册（与登录分离）：账号查重后创建用户并直接签发令牌（注册即登录）。
+     * 账号统一映射为 app- 前缀 SSO 标识（ssoProvider=dev），与前端保持一致。
+     */
+    @Override
+    public UserLoginRespVO register(UserRegisterReqVO reqVO) {
+        String account = reqVO.getAccount().trim();
+        String ssoUserId = "app-" + account.toLowerCase();
+        if (userMapper.selectBySso(ssoUserId, "dev") != null) {
+            throw exception(USER_ACCOUNT_EXISTS);
+        }
+        UserLoginReqVO loginReqVO = new UserLoginReqVO();
+        loginReqVO.setSsoProvider("dev");
+        loginReqVO.setSsoUserId(ssoUserId);
+        loginReqVO.setNickname(reqVO.getNickname() == null || reqVO.getNickname().trim().isEmpty()
+                ? account : reqVO.getNickname().trim());
+        loginReqVO.setPassword(reqVO.getPassword());
+        UserDO user = doRegister(loginReqVO);
+        log.info("[register][ssoProvider={}, ssoUserId={}] 新用户注册 id={}",
+                loginReqVO.getSsoProvider(), loginReqVO.getSsoUserId(), user.getId());
         String token = UUID.randomUUID().toString().replace("-", "");
         userTokenRedisDAO.create(token, user.getId());
         return new UserLoginRespVO(token, BeanUtils.toBean(user, UserRespVO.class));
