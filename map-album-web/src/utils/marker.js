@@ -3,6 +3,7 @@ import { fileUrl } from '../api/index.js'
 // 构建自定义 Marker 的 HTMLElement
 // createMarkerElement：详情视图（>=14 级）—— 照片缩略图 + 圆点 + 名称
 // createSimpleMarkerElement：远视图（<14 级）—— 纯图标 + 照片数，不加载任何图片
+// createPickMarkerElement：上传选点模式 —— 蓝色圆点 + 扩散光圈（可拖动）
 export function createMarkerElement(spot, photo) {
   const wrapper = document.createElement('div')
   wrapper.className = 'custom-marker'
@@ -67,6 +68,24 @@ export function createSimpleMarkerElement(spot, photoCount) {
   return wrapper
 }
 
+/**
+ * 上传选点模式的蓝色标记：蓝色圆点 + 扩散光圈（anchor=center）。
+ */
+export function createPickMarkerElement() {
+  const wrapper = document.createElement('div')
+  wrapper.className = 'pick-marker'
+
+  const pulse = document.createElement('div')
+  pulse.className = 'pick-marker-pulse'
+  wrapper.appendChild(pulse)
+
+  const dot = document.createElement('div')
+  dot.className = 'pick-marker-dot'
+  wrapper.appendChild(dot)
+
+  return wrapper
+}
+
 // 动态注入 marker 样式（一次性）
 let _injected = false
 export function injectMarkerStyles() {
@@ -78,8 +97,10 @@ export function injectMarkerStyles() {
       position: relative; cursor: pointer;
       display: flex; flex-direction: column; align-items: center;
       transition: transform 0.2s;
+      touch-action: none;
     }
     .custom-marker:hover { transform: scale(1.08); z-index: 10; }
+    .custom-marker.marker-dragging { transform: scale(1.18); z-index: 30; }
     .marker-photo-wrap {
       width: 48px; height: 48px; border-radius: 8px; overflow: hidden;
       border: 2.5px solid #fff; box-shadow: 0 3px 10px rgba(0,0,0,0.25);
@@ -107,6 +128,29 @@ export function injectMarkerStyles() {
       margin-top: 2px; padding: 2px 8px; border-radius: 10px;
       background: rgba(0,0,0,0.7); color: #fff; font-size: 11px;
       white-space: nowrap; max-width: 100px; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* ===== 上传选点：蓝色标记 ===== */
+    .pick-marker {
+      position: relative; width: 0; height: 0;
+      touch-action: none; cursor: grab;
+    }
+    .pick-marker-dot {
+      position: absolute; left: -12px; top: -12px;
+      width: 24px; height: 24px; border-radius: 50%;
+      background: #1a73e8; border: 3px solid #fff;
+      box-shadow: 0 2px 10px rgba(26,115,232,0.55);
+      z-index: 2; box-sizing: border-box;
+    }
+    .pick-marker-pulse {
+      position: absolute; left: -24px; top: -24px;
+      width: 48px; height: 48px; border-radius: 50%;
+      background: rgba(26,115,232,0.30);
+      animation: pickPulse 1.6s ease-out infinite;
+    }
+    @keyframes pickPulse {
+      0% { transform: scale(0.45); opacity: 1; }
+      100% { transform: scale(1.35); opacity: 0; }
     }
   `
   document.head.appendChild(style)

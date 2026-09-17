@@ -139,19 +139,13 @@ export function useAmap() {
     console.log('[useAmap] 地图控件已添加（ToolBar / Scale / Geolocation）')
   }
 
-  async function initMap(containerId) {
+  /**
+   * 初始化地图：中心/缩放由调用方传入（App 的定位链决定：
+   * 权限定位 → 历史定位 → IP → 苏州），这里不再自动 IP 定位。
+   */
+  async function initMap(containerId, options = {}) {
     await loadAmapSDK()
-    const m = createMap(containerId)
-
-    try {
-      const loc = await fetchIpLocation()
-      m.setCenter([loc.lng, loc.lat])
-      m.setZoom(13)
-      console.log('[useAmap] IP 定位成功:', loc.city)
-    } catch (e) {
-      console.warn('[useAmap] IP 定位失败，使用默认中心:', e.message)
-    }
-
+    const m = createMap(containerId, options)
     return m
   }
 

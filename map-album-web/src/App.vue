@@ -5,21 +5,41 @@
       @map-ready="onMapReady"
       @spot-click="onSpotClick"
     />
-    <!-- 浮动创建按钮 + 菜单（PC右上 / 手机右下） -->
-    <div class="fab-wrapper" :class="{ open: fabOpen }">
-      <button class="fab-add" @click="fabOpen = !fabOpen" title="添加">
-        <span>{{ fabOpen ? '✕' : '+' }}</span>
-      </button>
-      <div class="fab-menu">
-        <button class="fab-menu-item" @click="onFabAddSpot">📌 添加点位</button>
-        <button class="fab-menu-item" @click="onFabUploadPhoto">📷 上传图片</button>
-        <button class="fab-menu-item" @click="onFabTakePhoto" v-if="hasCapacitor">🤳 拍照</button>
-      </div>
-    </div>
-    <!-- 上传图片的隐藏 input -->
-    <input type="file" id="exifFileInput" accept="image/*" multiple style="display:none" @change="onExifFilesSelected">
 
-    <!-- 点位面板 -->
+    <!-- 底部中间蓝色加号：上传入口 -->
+    <button class="upload-fab" @click.stop="sheetOpen = true" aria-label="上传照片">＋</button>
+
+    <!-- 上传方式选择：拍照 / 从相册选择 -->
+    <Transition name="fade">
+      <div v-if="sheetOpen" class="sheet-mask" @click="sheetOpen = false"></div>
+    </Transition>
+    <div class="action-sheet" :class="{ open: sheetOpen }">
+      <button class="sheet-item" @click="onTakePhoto">📷 拍照</button>
+      <button class="sheet-item" @click="onPickGallery">🖼️ 从相册选择</button>
+      <button class="sheet-item cancel" @click="sheetOpen = false">取消</button>
+    </div>
+
+    <!-- 上传选点面板（底部滑出，地图保持可操作） -->
+    <UploadPickPanel
+      v-if="pickVisible && currentFile"
+      :key="uploadSeq"
+      :preview-url="previewUrl"
+      :coord="pickCoord"
+      :busy="pickBusy"
+      @confirm="onUploadConfirm"
+      @cancel="onUploadCancel"
+    />
+
+    <!-- 点位详情弹窗：图片列表 + 一一对应备注 + 图片/点位标签 -->
+    <SpotDetailPopup
+      v-if="popupSpot"
+      :spot="popupSpot"
+      :photos="popupPhotos"
+      @close="popupSpot = null"
+      @manage="onManageSpot"
+    />
+
+    <!-- 点位管理面板 -->
     <SpotPanel
       v-if="panelVisible"
       :spot="currentSpot"
@@ -36,7 +56,7 @@
       @preview-photo="onPreviewPhoto"
     />
 
-    <!-- 光箱（支持连续翻页） -->
+    <!-- 光箱（照片大图浏览，支持连续翻页） -->
     <PhotoLightbox
       :photos="lightboxPhotos"
       v-model:index="lightboxIndex"
@@ -51,13 +71,15 @@
 <script setup>
 import { ref, computed, provide, onMounted, onBeforeUnmount } from 'vue'
 import exifr from 'exifr'
-import { uploadPhoto, hasToken, setNeedLoginListener } from './api/index.js'
+import { uploadPhoto, hasToken, setNeedLoginListener, fetchIpLocation } from './api/index.js'
 import { wgs84ToGcj02 } from './utils/coord.js'
-import { hasCapacitor, takePhoto } from './utils/capacitor.js'
+import { hasCapacitor, takePhoto, pickFromGallery, getCurrentPosition } from './utils/capacitor.js'
 import SearchBar from './components/SearchBar.vue'
 import MapContainer from './components/MapContainer.vue'
 import SpotPanel from './components/SpotPanel.vue'
 import PhotoLightbox from './components/PhotoLightbox.vue'
+import UploadPickPanel from './components/UploadPickPanel.vue'
+import SpotDetailPopup from './components/SpotDetailPopup.vue'
 import ToastMessage from './components/ToastMessage.vue'
 import UserLogin from './components/UserLogin.vue'
 import { useAmap } from './composables/useAmap.js'
@@ -111,6 +133,13 @@ const lightboxVisible = ref(false)
 const lightboxPhotos = ref([])   // [{ url, thumbUrl }, ...]
 const lightboxIndex = ref(0)
 
+// ===== 点位详情弹窗状态 =====
+const popupSpot = ref(null)
+const popupPhotos = computed(() => {
+  if (!popupSpot.value) return []
+  return photosStore.photosBySpot.value[popupSpot.value.id] || []
+})
+
 // ===== 当前点位照片 =====
 const currentPhotos = computed(() => {
   if (!currentSpot.value) return []
@@ -124,21 +153,107 @@ provide('showToast', showToast)
 provide('toastState', toastState)
 provide('spotsStore', spotsStore)
 provide('photosStore', photosStore)
-// 新的光箱方式：通过 provide 让 PhotoGrid 等子组件打开光箱
+// 光箱：通过 provide 让 PhotoGrid / SpotDetailPopup 打开大图浏览
 provide('openLightbox', (photos, idx) => {
   lightboxPhotos.value = photos || []
   lightboxIndex.value = idx || 0
   lightboxVisible.value = true
 })
 
+// ===== 定位链（需求1）：权限定位 → 历史定位 → IP → 苏州 =====
+const SUZHOU_CENTER = { lng: 120.619585, lat: 31.299379 }
+const HISTORY_KEY = 'map_album_last_location'
+
+function readHistory() {
+  try {
+    const s = JSON.parse(localStorage.getItem(HISTORY_KEY) || 'null')
+    if (s && s.lng != null && s.lat != null) return s
+  } catch (e) { /* ignore */ }
+  return null
+}
+
+function saveHistory(coord, src) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify({ lng: coord.lng, lat: coord.lat, src, ts: Date.now() }))
+  } catch (e) { /* ignore */ }
+}
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('定位超时')), ms))
+  ])
+}
+
+async function locateChain(m) {
+  // 1) 请求用户位置权限定位（原生 Capacitor GPS / 浏览器定位）
+  try {
+    showToast('正在获取定位…')
+    if (hasCapacitor()) {
+      try {
+        const { Geolocation } = await import('@capacitor/geolocation')
+        await Geolocation.requestPermissions(['location', 'coarseLocation'])
+      } catch (e) { /* 权限请求失败则直接尝试定位 */ }
+    }
+    const pos = await withTimeout(getCurrentPosition(), 12000)
+    const gcj = wgs84ToGcj02({ lng: pos.lng, lat: pos.lat })
+    m.setCenter([gcj.lng, gcj.lat])
+    m.setZoom(15)
+    saveHistory(gcj, 'gps')
+    showToast('已定位到当前位置', 'success')
+    return
+  } catch (e) {
+    console.warn('[App] 权限定位失败，尝试历史定位:', e?.message || e)
+  }
+
+  // 2) 历史定位（上次成功定位缓存，创建地图时已应用，这里确保中心一致）
+  const hist = readHistory()
+  if (hist) {
+    m.setCenter([hist.lng, hist.lat])
+    m.setZoom(14)
+    showToast('使用上次定位')
+    return
+  }
+
+  // 3) IP 网络定位（无需权限的兜底）
+  try {
+    const loc = await withTimeout(fetchIpLocation(), 6000)
+    m.setCenter([loc.lng, loc.lat])
+    m.setZoom(13)
+    saveHistory({ lng: loc.lng, lat: loc.lat }, 'ip')
+    showToast('使用网络定位')
+    return
+  } catch (e) { /* ignore */ }
+
+  // 4) 默认：苏州（创建地图时已应用）
+  showToast('默认定位：苏州')
+}
+
 // ===== 地图就绪 =====
 async function onMapReady(containerId) {
   try {
-    const m = await initMap(containerId)
-    await spotsStore.bind(m, getAMap(), () => photosStore.latestPhotoMap.value, () => photosStore.photosBySpot.value)
+    // 初始中心：历史定位 → 苏州（定位链稍后继续）
+    const hist = readHistory()
+    const initOpts = hist
+      ? { center: [hist.lng, hist.lat], zoom: 14 }
+      : { center: [SUZHOU_CENTER.lng, SUZHOU_CENTER.lat], zoom: 12 }
+    const m = await initMap(containerId, initOpts)
+    await spotsStore.bind(m, getAMap(),
+      () => photosStore.latestPhotoMap.value,
+      () => photosStore.photosBySpot.value,
+      {
+        onMarkerClick,
+        onMarkerMoved,
+        onPickMove
+      }
+    )
 
-    // --- 地图点击：创建模式下放置标记 ---
+    // --- 地图点击：选点模式移动蓝色标记 / 创建模式放置标记 ---
     m.on('click', async (e) => {
+      if (spotsStore.isPicking.value) {
+        spotsStore.movePickMarker(e.lnglat)
+        return
+      }
       if (!spotsStore.isCreating.value) return
       const coord = spotsStore.placeCreateMarker(e.lnglat)
       createCoord.value = {
@@ -167,26 +282,42 @@ async function onMapReady(containerId) {
       } catch (err) { console.warn('[App] 逆地理编码失败:', err) }
     })
 
-    // --- 右键（PC）/ 长按（移动端）→ 进入创建模式 ---
-    m.on('rightclick', () => startCreateMode())
+    // --- 右键（PC）：选点模式移动标记 / 进入创建模式 ---
+    m.on('rightclick', (e) => {
+      if (spotsStore.isPicking.value) {
+        if (e && e.lnglat) spotsStore.movePickMarker(e.lnglat)
+        return
+      }
+      startCreateMode()
+    })
 
-    // 移动端：模拟长按（touchstart + 1s）
+    // 移动端：长按地图 → 选点模式移动标记 / 进入创建模式
     if (isMobile.value) {
       let longPressTimer = null
       const mapContainer = document.getElementById('amap-container')
       if (mapContainer) {
         mapContainer.addEventListener('touchstart', (e) => {
-          // 多指不触发
+          // 多指不触发；触点在标记上不触发（标记有自己的长按拖动）
           if (e.touches.length > 1) return
+          const target = e.target
+          if (target && target.closest && target.closest('.custom-marker, .pick-marker')) return
+          const t = e.touches[0]
           longPressTimer = setTimeout(() => {
-            // 取地图中心附近（长按无法获取精确坐标，提示用户点击放置）
-            startCreateMode()
-          }, 800)
+            if (spotsStore.isPicking.value) {
+              const ll = clientToLngLat(t.clientX, t.clientY)
+              if (ll) spotsStore.movePickMarker(ll)
+            } else {
+              startCreateMode()
+            }
+          }, 600)
         }, { passive: true })
         mapContainer.addEventListener('touchend', () => clearTimeout(longPressTimer))
         mapContainer.addEventListener('touchmove', () => clearTimeout(longPressTimer))
       }
     }
+
+    // --- 定位链：权限定位 → 历史定位 → IP → 苏州 ---
+    locateChain(m)
 
     // --- 加载数据 ---
     try {
@@ -203,6 +334,18 @@ async function onMapReady(containerId) {
     console.error('[App] 地图初始化失败:', e)
     showToast('地图初始化失败: ' + e.message, 'error')
   }
+}
+
+/** 屏幕坐标 → 地图经纬度（长按选点用） */
+function clientToLngLat(clientX, clientY) {
+  const m = map.value
+  if (!m || typeof m.containerToLngLat !== 'function') return null
+  try {
+    const rect = m.getContainer().getBoundingClientRect()
+    const AMap = getAMap()
+    const pixel = new AMap.Pixel(clientX - rect.left, clientY - rect.top)
+    return m.containerToLngLat(pixel)
+  } catch (e) { return null }
 }
 
 function startCreateMode() {
@@ -222,138 +365,238 @@ function onSearchSelect({ lng, lat, name }) {
   }
   showToast('已定位到: ' + name)
 }
-// ===== FAB =====
-const fabOpen = ref(false)
 
-function onFabAddSpot() {
-  fabOpen.value = false
-  startCreateMode()
-}
+// ===== 上传入口（需求2）：底部中间蓝色加号 → 拍照 / 从相册选择 =====
+const sheetOpen = ref(false)
 
-function onFabUploadPhoto() {
-  fabOpen.value = false
-  document.getElementById('exifFileInput').click()
-}
-
-async function onFabTakePhoto() {
-  fabOpen.value = false
+async function onTakePhoto() {
+  sheetOpen.value = false
   try {
     const file = await takePhoto()
-    // 复用 EXIF 解析流程
-    await processExifPhoto(file)
+    if (file) enqueueFiles([file])
   } catch (e) {
-    if (e.message !== '取消拍照') {
-      showToast('拍照失败: ' + e.message, 'error')
-    }
+    if (e && e.message !== '取消拍照') showToast('拍照失败: ' + (e?.message || e), 'error')
   }
 }
 
-// 全局点击关闭 FAB
-document.addEventListener('click', (e) => {
-  if (!e.target.closest('.fab-wrapper')) fabOpen.value = false
-})
-
-// ===== EXIF 处理 =====
-let _pendingFilesNoGps = []
-
-async function onExifFilesSelected(e) {
-  const files = Array.from(e.target.files || [])
-  e.target.value = ''
-  if (files.length === 0) return
-  showToast('正在解析照片位置信息…')
-
-  for (const file of files) {
-    await processExifPhoto(file)
-  }
-
-  // 无 GPS 文件的处理
-  if (_pendingFilesNoGps.length > 0) {
-    startCreateMode()
-    showToast(`${_pendingFilesNoGps.length} 张照片无位置信息，请点击地图放置点位`, 'info')
-  }
-}
-
-async function processExifPhoto(file) {
+async function onPickGallery() {
+  sheetOpen.value = false
   try {
-    const gps = await exifr.parse(file, { gps: true })
-    if (gps && gps.latitude != null && gps.longitude != null) {
-      const gcj = wgs84ToGcj02({ lng: gps.longitude, lat: gps.latitude })
-      await uploadWithGps(file, gcj.lng, gcj.lat)
-    } else {
-      _pendingFilesNoGps.push(file)
-    }
-  } catch {
-    _pendingFilesNoGps.push(file)
+    const files = await pickFromGallery(true)
+    if (files && files.length) enqueueFiles(files)
+  } catch (e) {
+    if (e && e.message !== '未选择照片') showToast('选择照片失败: ' + (e?.message || e), 'error')
   }
 }
 
-async function uploadWithGps(file, lng, lat) {
-  // 查找 50m 内的已有点位
-  const nearby = spotsStore.spots.value.find(s =>
-    Math.abs(s.lng - lng) < 0.0005 && Math.abs(s.lat - lat) < 0.0005
-  )
+// ===== 上传选点流程（需求3/6）：选图 → 底部面板 + 蓝色可拖动标记 → 备注 → 确认上传 =====
+const pickVisible = ref(false)
+const pickBusy = ref(false)
+const pickCoord = ref({ lng: 0, lat: 0, address: '', province: '', city: '', district: '' })
+const currentFile = ref(null)
+const previewUrl = ref('')
+const uploadSeq = ref(0)
+let uploadQueue = []
 
-  let spotId
-  if (nearby) {
-    spotId = nearby.id
-  } else {
-    let address = '', province = '', city = '', district = ''
+function enqueueFiles(files) {
+  uploadQueue.push(...files)
+  if (pickVisible.value && currentFile.value) return // 已在选点流程中（追加到队列）
+  nextUploadFile(false)
+}
+
+/**
+ * 取下一张待上传照片。
+ * @param {boolean} useCurrentPos true=沿用当前位置（批量连传）；false=解析 EXIF GPS / 地图中心
+ */
+async function nextUploadFile(useCurrentPos) {
+  const file = uploadQueue.shift()
+  if (!file) { finishPick(); return }
+  currentFile.value = file
+  releasePreview()
+  previewUrl.value = URL.createObjectURL(file)
+  uploadSeq.value++
+
+  let ll = null
+  if (!useCurrentPos) {
+    try {
+      const gps = await exifr.parse(file, { gps: true })
+      if (gps && gps.latitude != null && gps.longitude != null) {
+        ll = wgs84ToGcj02({ lng: gps.longitude, lat: gps.latitude })
+      }
+    } catch (e) { /* 无 EXIF */ }
+    if (!ll && map.value) {
+      const c = map.value.getCenter()
+      ll = { lng: c.getLng(), lat: c.getLat() }
+    }
+  }
+  if (!ll) ll = { lng: pickCoord.value.lng, lat: pickCoord.value.lat }
+  if (!ll.lng || !ll.lat) {
+    const c = map.value ? map.value.getCenter() : { getLng: () => SUZHOU_CENTER.lng, getLat: () => SUZHOU_CENTER.lat }
+    ll = { lng: c.getLng(), lat: c.getLat() }
+  }
+
+  pickCoord.value = { lng: ll.lng, lat: ll.lat, address: '', province: '', city: '', district: '' }
+  spotsStore.startPickMode(ll)
+  if (!useCurrentPos && map.value) {
+    map.value.setCenter([ll.lng, ll.lat])
+    map.value.setZoom(16)
+  }
+  pickVisible.value = true
+  queueRegeo(ll)
+}
+
+function releasePreview() {
+  if (previewUrl.value) {
+    try { URL.revokeObjectURL(previewUrl.value) } catch (e) { /* ignore */ }
+    previewUrl.value = ''
+  }
+}
+
+/** 选点变化（拖动标记 / 点击地图 / 长按地图）→ 更新面板坐标 + 防抖逆地理编码 */
+function onPickMove(coord) {
+  pickCoord.value = { ...pickCoord.value, lng: coord.lng, lat: coord.lat, address: '' }
+  queueRegeo(coord)
+}
+
+let _regeoTimer = null
+let _regeoSeq = 0
+function queueRegeo(coord) {
+  clearTimeout(_regeoTimer)
+  const seq = ++_regeoSeq
+  _regeoTimer = setTimeout(async () => {
     try {
       const geocoder = await createGeocoder()
-      const addrResult = await new Promise((resolve) => {
-        geocoder.getAddress([lng, lat], (status, result) => {
-          resolve(status === 'complete' && result.regeocode ? result.regeocode : null)
-        })
+      geocoder.getAddress([coord.lng, coord.lat], (status, result) => {
+        if (seq !== _regeoSeq) return // 已有更新的选点，丢弃旧结果
+        if (status === 'complete' && result.regeocode) {
+          const ac = result.regeocode.addressComponent || {}
+          pickCoord.value = {
+            ...pickCoord.value,
+            address: result.regeocode.formattedAddress || '',
+            province: ac.province || '',
+            city: ac.city || '',
+            district: ac.district || ''
+          }
+        }
       })
-      if (addrResult) {
-        address = addrResult.formattedAddress || ''
-        province = (addrResult.addressComponent || {}).province || ''
-        city = (addrResult.addressComponent || {}).city || ''
-        district = (addrResult.addressComponent || {}).district || ''
-      }
-    } catch (ex) { /* ignore */ }
+    } catch (e) { /* ignore */ }
+  }, 300)
+}
 
-    try {
-      const newSpot = await spotsStore.create({
-        name: '相机拍摄 ' + lat.toFixed(4) + ', ' + lng.toFixed(4),
-        lat, lng, address, province, city, district,
-        category: 'scenic', userId: 2
-      })
-      spotId = newSpot.id
-      photosStore.photosBySpot.value = { ...photosStore.photosBySpot.value, [spotId]: [] }
-    } catch (ex) {
-      console.error('[exif] spot create failed:', ex)
-      return
-    }
-  }
+/** 找 50m 内已有点位，没有则创建（需求4：确认上传后地图出现方形缩略图标记） */
+async function ensureSpotAt(coord) {
+  const near = spotsStore.spots.value.find(s =>
+    Math.abs(s.lng - coord.lng) < 0.0005 && Math.abs(s.lat - coord.lat) < 0.0005
+  )
+  if (near) return near
+  const created = await spotsStore.create({
+    name: coord.address || `位置 ${Number(coord.lat).toFixed(4)}, ${Number(coord.lng).toFixed(4)}`,
+    lat: coord.lat,
+    lng: coord.lng,
+    address: coord.address || '',
+    province: coord.province || '',
+    city: coord.city || '',
+    district: coord.district || '',
+    category: 'scenic'
+  })
+  photosStore.photosBySpot.value = { ...photosStore.photosBySpot.value, [created.id]: [] }
+  return created
+}
 
+async function onUploadConfirm(description) {
+  if (pickBusy.value || !currentFile.value) return
+  pickBusy.value = true
   try {
-    await uploadPhoto(spotId, file, '')
-  } catch (ex) {
-    console.error('[exif] upload failed:', file.name, ex)
-  }
+    const coord = { ...pickCoord.value }
+    const spot = await ensureSpotAt(coord)
+    await uploadPhoto(spot.id, currentFile.value, description || '')
+    await photosStore.loadAllPhotos()
+    spotsStore.renderAllMarkers()
+    showToast('上传成功', 'success')
 
-  // 刷新
-  await photosStore.loadAllPhotos()
-  spotsStore.renderAllMarkers()
-
-  // 跳转到操作点位
-  const spot = spotsStore.spots.value.find(s => s.id === spotId)
-  if (spot) {
-    map.value?.setCenter([spot.lng, spot.lat])
-    map.value?.setZoom(16)
-    autoEdit.value = true
-    currentSpot.value = spot
-    isCreating.value = false
-    spotsStore.isCreating.value = false
-    spotsStore.cancelCreateMode()
-    panelVisible.value = true
-    await photosStore.loadPhotos(spotId)
-    showToast(`照片已上传，请编辑点位信息`, 'success')
+    if (uploadQueue.length > 0) {
+      // 下一张沿用当前位置（批量连传同一地点）
+      await nextUploadFile(true)
+    } else {
+      const s = spotsStore.spots.value.find(x => x.id === spot.id)
+      if (s && map.value) {
+        map.value.setCenter([s.lng, s.lat])
+        map.value.setZoom(16)
+      }
+      finishPick()
+    }
+  } catch (e) {
+    showToast('上传失败: ' + (e?.message || e), 'error')
+  } finally {
+    pickBusy.value = false
   }
 }
 
-// ===== 点位交互 =====
+async function onUploadCancel() {
+  releasePreview()
+  currentFile.value = null
+  if (uploadQueue.length > 0) {
+    await nextUploadFile(true)
+  } else {
+    finishPick()
+  }
+}
+
+function finishPick() {
+  spotsStore.stopPickMode()
+  pickVisible.value = false
+  currentFile.value = null
+  releasePreview()
+  uploadQueue = []
+}
+
+// ===== 点位详情弹窗（需求5）：点击缩略图标记 → 图片列表 + 一一对应备注 =====
+function onMarkerClick(spot) {
+  if (spotsStore.isPicking.value || spotsStore.isCreating.value) return
+  popupSpot.value = spot
+  if (!photosStore.photosBySpot.value[spot.id]) {
+    photosStore.loadPhotos(spot.id).catch(() => {})
+  }
+}
+
+function onManageSpot() {
+  const spot = popupSpot.value
+  popupSpot.value = null
+  if (spot) onSpotClick(spot) // 打开点位管理面板
+}
+
+// ===== 长按标记拖动（需求7）：松手保存点位新位置 =====
+async function onMarkerMoved(spot, coord) {
+  try {
+    const updated = await spotsStore.update({ id: spot.id, lat: coord.lat, lng: coord.lng })
+    showToast('位置已保存', 'success')
+    if (popupSpot.value && popupSpot.value.id === spot.id) popupSpot.value = updated
+    // 后台逆地理编码，静默更新地址
+    try {
+      const geocoder = await createGeocoder()
+      geocoder.getAddress([coord.lng, coord.lat], async (status, result) => {
+        if (status === 'complete' && result.regeocode) {
+          const ac = result.regeocode.addressComponent || {}
+          try {
+            const u2 = await spotsStore.update({
+              id: spot.id,
+              address: result.regeocode.formattedAddress || '',
+              province: ac.province || '',
+              city: ac.city || '',
+              district: ac.district || ''
+            })
+            if (popupSpot.value && popupSpot.value.id === spot.id) popupSpot.value = u2
+          } catch (e) { /* ignore */ }
+        }
+      })
+    } catch (e) { /* ignore */ }
+  } catch (e) {
+    showToast('保存位置失败: ' + (e?.message || e), 'error')
+    spotsStore.renderAllMarkers() // 回弹到原位置
+  }
+}
+
+// ===== 点位面板交互 =====
 function onSpotClick(spot) {
   currentSpot.value = spot
   isCreating.value = false
@@ -365,7 +608,6 @@ function onSpotClick(spot) {
 }
 
 function closePanel() {
-  _pendingFilesNoGps = []
   autoEdit.value = false
   panelVisible.value = false
   currentSpot.value = null
@@ -375,27 +617,12 @@ function closePanel() {
 
 async function onSpotCreated(spotData) {
   try {
-    const spot = await spotsStore.create({ ...spotData, userId: 2 })
+    const spot = await spotsStore.create({ ...spotData })
     spotsStore.cancelCreateMode()
     photosStore.photosBySpot.value = { ...photosStore.photosBySpot.value, [spot.id]: [] }
     currentSpot.value = spot
     isCreating.value = false
-
-    if (_pendingFilesNoGps.length > 0) {
-      let up = 0
-      for (const file of _pendingFilesNoGps) {
-        try { await uploadPhoto(spot.id, file, ''); up++ }
-        catch (ex) { console.error('[exif] pending upload failed:', file.name, ex) }
-      }
-      _pendingFilesNoGps = []
-      await photosStore.loadPhotos(spot.id)
-      await photosStore.loadAllPhotos()
-      spotsStore.renderAllMarkers()
-      currentSpot.value = { ...spot, photoCount: up }
-      showToast(`点位创建成功，已上传 ${up} 张照片`, 'success')
-    } else {
-      showToast('点位创建成功', 'success')
-    }
+    showToast('点位创建成功', 'success')
   } catch (e) {
     showToast('创建失败: ' + e.message, 'error')
   }
@@ -405,6 +632,7 @@ async function onSpotUpdated(spotData) {
   try {
     const updated = await spotsStore.update(spotData)
     currentSpot.value = updated
+    if (popupSpot.value && popupSpot.value.id === updated.id) popupSpot.value = updated
     showToast('更新成功', 'success')
   } catch (e) {
     showToast('更新失败: ' + e.message, 'error')
@@ -416,6 +644,7 @@ async function onSpotDeleted(id) {
     await spotsStore.remove(id)
     panelVisible.value = false
     currentSpot.value = null
+    if (popupSpot.value && popupSpot.value.id === id) popupSpot.value = null
     showToast('点位已删除', 'success')
   } catch (e) {
     showToast('删除失败: ' + e.message, 'error')
@@ -467,16 +696,11 @@ function onPreviewPhoto(photo) {
 // ===== 键盘快捷键 =====
 function onKeyDown(e) {
   if (e.key !== 'Escape') return
-  if (lightboxVisible.value) {
-    lightboxVisible.value = false
-    e.preventDefault()
-    return
-  }
-  if (panelVisible.value) {
-    closePanel()
-    e.preventDefault()
-    return
-  }
+  if (sheetOpen.value) { sheetOpen.value = false; e.preventDefault(); return }
+  if (popupSpot.value) { popupSpot.value = null; e.preventDefault(); return }
+  if (lightboxVisible.value) { lightboxVisible.value = false; e.preventDefault(); return }
+  if (pickVisible.value) { finishPick(); showToast('已取消上传'); e.preventDefault(); return }
+  if (panelVisible.value) { closePanel(); e.preventDefault(); return }
   if (spotsStore.isCreating.value) {
     spotsStore.cancelCreateMode()
     showToast('已退出创建模式')
@@ -502,59 +726,54 @@ html, body, #app {
 }
 .app-root { width: 100%; height: 100%; position: relative; }
 
-/* ===== FAB ===== */
-.fab-wrapper {
-  position: fixed; top: 64px; right: 20px; z-index: 150;
-}
-.fab-add {
-  width: 48px; height: 48px; border-radius: 50%;
-  background: #4a90d9; color: #fff;
-  border: none; cursor: pointer; font-size: 26px;
-  box-shadow: 0 4px 16px rgba(74,144,217,0.4);
+/* ===== 底部中间上传按钮 ===== */
+.upload-fab {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: max(24px, env(safe-area-inset-bottom));
+  z-index: 150;
+  width: 60px; height: 60px; border-radius: 50%;
+  background: #1a73e8; color: #fff;
+  border: none; cursor: pointer;
+  font-size: 32px; line-height: 1;
+  box-shadow: 0 6px 20px rgba(26,115,232,0.45);
   display: flex; align-items: center; justify-content: center;
   transition: transform 0.2s, box-shadow 0.2s;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  padding-bottom: 4px; /* 视觉居中 ＋ */
 }
-.fab-add:hover { transform: scale(1.1); box-shadow: 0 6px 20px rgba(74,144,217,0.55); }
-.fab-add:active { transform: scale(0.95); }
+.upload-fab:hover { transform: translateX(-50%) scale(1.08); box-shadow: 0 8px 24px rgba(26,115,232,0.6); }
+.upload-fab:active { transform: translateX(-50%) scale(0.94); }
 
-.fab-menu {
-  position: absolute; top: 56px; right: 0;
-  background: #fff; border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-  overflow: hidden;
-  opacity: 0; transform: translateY(-8px);
+/* ===== 上传方式选择（动作面板） ===== */
+.sheet-mask {
+  position: fixed; inset: 0; z-index: 180;
+  background: rgba(0,0,0,0.35);
+}
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.action-sheet {
+  position: fixed; left: 50%; bottom: 0; z-index: 190;
+  width: min(420px, 94vw);
+  transform: translate(-50%, 110%);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
-  transition: opacity 0.2s, transform 0.2s;
-  min-width: 160px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
 }
-.fab-wrapper.open .fab-menu {
-  opacity: 1; transform: translateY(0); pointer-events: auto;
-}
-.fab-menu-item {
-  display: block; width: 100%; padding: 14px 18px;
+.action-sheet.open { transform: translate(-50%, 0); pointer-events: auto; }
+.sheet-item {
+  display: block; width: 100%;
+  padding: 16px; min-height: 54px;
   border: none; background: #fff; cursor: pointer;
-  font-size: 14px; text-align: left; white-space: nowrap;
-  transition: background 0.15s;
+  font-size: 16px; text-align: center; color: #222;
   -webkit-tap-highlight-color: transparent;
-  min-height: 48px;
 }
-.fab-menu-item:hover { background: #f5f8fc; }
-.fab-menu-item + .fab-menu-item { border-top: 1px solid #f0f0f0; }
-
-/* ===== 移动端适配 ===== */
-@media (max-width: 768px) {
-  .fab-wrapper {
-    top: auto; bottom: max(24px, env(safe-area-inset-bottom));
-    right: 20px;
-  }
-  .fab-add {
-    width: 56px; height: 56px; font-size: 30px;
-    box-shadow: 0 4px 20px rgba(74,144,217,0.5);
-  }
-  .fab-menu {
-    top: auto; bottom: 64px;
-  }
+.sheet-item:active { background: #f5f8fc; }
+.sheet-item + .sheet-item { border-top: 1px solid #f0f0f0; }
+.sheet-item:first-child { border-radius: 14px 14px 0 0; }
+.sheet-item.cancel {
+  margin-top: 8px; border-radius: 14px;
+  color: #8a97a8; font-weight: 500;
 }
 </style>
