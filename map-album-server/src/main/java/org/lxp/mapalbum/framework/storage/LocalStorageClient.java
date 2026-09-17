@@ -58,6 +58,20 @@ public class LocalStorageClient implements StorageClient {
     }
 
     @Override
+    public String uploadBytes(byte[] content, String objectKey, String contentType) {
+        Path target = resolveKey(objectKey);
+        try {
+            Files.createDirectories(target.getParent());
+            Files.write(target, content);
+            log.info("[uploadBytes][key={}, size={}] 本地存储上传成功", objectKey, content.length);
+            return objectKey;
+        } catch (IOException e) {
+            log.error("[uploadBytes][key={}] 本地存储上传失败", objectKey, e);
+            throw exception(PHOTO_UPLOAD_FAIL);
+        }
+    }
+
+    @Override
     public String signedUrl(String objectKey) {
         if (objectKey == null || objectKey.isEmpty()) {
             return null;

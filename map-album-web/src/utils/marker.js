@@ -1,4 +1,6 @@
 // 构建自定义 Marker 的 HTMLElement
+// createMarkerElement：详情视图（>=14 级）—— 照片缩略图 + 圆点 + 名称
+// createSimpleMarkerElement：远视图（<14 级）—— 纯图标 + 照片数，不加载任何图片
 export function createMarkerElement(spot, photo) {
   const wrapper = document.createElement('div')
   wrapper.className = 'custom-marker'
@@ -35,6 +37,34 @@ export function createMarkerElement(spot, photo) {
   return wrapper
 }
 
+/**
+ * 远视图简化标记：📍 图标 + 照片数角标（无 <img>，零图片请求）。
+ */
+export function createSimpleMarkerElement(spot, photoCount) {
+  const wrapper = document.createElement('div')
+  wrapper.className = 'custom-marker'
+
+  const photoWrap = document.createElement('div')
+  photoWrap.className = 'marker-photo-wrap marker-simple-wrap'
+  const count = photoCount > 0 ? String(photoCount) : ''
+  photoWrap.innerHTML =
+    '<div class="marker-no-photo">📍' +
+    (count ? '<span class="marker-count">' + count + '</span>' : '') +
+    '</div>'
+  wrapper.appendChild(photoWrap)
+
+  const dot = document.createElement('div')
+  dot.className = 'marker-dot'
+  wrapper.appendChild(dot)
+
+  const label = document.createElement('div')
+  label.className = 'marker-label'
+  label.textContent = spot.name || '未命名'
+  wrapper.appendChild(label)
+
+  return wrapper
+}
+
 function photoUrl(url) {
   if (!url) return ''
   if (url.startsWith('http')) return url
@@ -63,6 +93,14 @@ export function injectMarkerStyles() {
     .marker-no-photo {
       width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
       background: linear-gradient(135deg, #4a90d9, #357abd); color: #fff; font-size: 20px;
+    }
+    .marker-simple-wrap .marker-no-photo { position: relative; background: linear-gradient(135deg, #5aa2e0, #357abd); }
+    .marker-count {
+      position: absolute; top: -5px; right: -5px;
+      min-width: 18px; height: 18px; line-height: 15px; padding: 0 4px;
+      border-radius: 9px; background: #e74c3c; color: #fff;
+      font-size: 11px; font-weight: bold; text-align: center;
+      border: 2px solid #fff; box-sizing: border-box;
     }
     .marker-dot {
       width: 10px; height: 10px; border-radius: 50%;

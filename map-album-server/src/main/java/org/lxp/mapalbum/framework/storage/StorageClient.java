@@ -23,6 +23,16 @@ public interface StorageClient {
     String upload(MultipartFile file, String objectKey);
 
     /**
+     * 上传内存字节数组（用于服务端生成的缩略图等派生文件）。
+     *
+     * @param content     文件字节内容
+     * @param objectKey   对象 key（如 photos/{spotId}/{ts}_{uuid}_t.jpg）
+     * @param contentType HTTP Content-Type（可为 null）
+     * @return objectKey（便于调用方落库）
+     */
+    String uploadBytes(byte[] content, String objectKey, String contentType);
+
+    /**
      * 将对象 key 转为可访问 URL。
      *
      * <p>OSS 实现生成临时签名 URL；本地实现返回 /uploads/{key} 相对路径

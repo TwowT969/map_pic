@@ -1,6 +1,7 @@
 package org.lxp.mapalbum.service.photo;
 
 import lombok.extern.slf4j.Slf4j;
+import net.coobird.thumbnailator.Thumbnails;
 import org.lxp.mapalbum.controller.app.photo.vo.PhotoRespVO;
 import org.lxp.mapalbum.dal.dataobject.PhotoDO;
 import org.lxp.mapalbum.dal.dataobject.SpotDO;
@@ -29,11 +30,18 @@ import static org.lxp.mapalbum.framework.common.exception.ServiceExceptionUtil.e
  * （DB 存对象 key，读取返回 /uploads/ 相对路径）；
  * 生产切换 OSS 时仅需调整 app.storage.type 配置，业务代码零改动。
  *
+ * <p>上传时同步生成服务端缩略图（256px，JPEG q0.7 / PNG q0.8），
+ * 列表/地图标记加载 thumbUrl 小图，避免全尺寸原图拖垮页面；
+ * 缩略图生成失败时回退原图 key，不阻断创建流程。
+ *
  * @author lxp
  */
 @Slf4j
 @Service
 public class PhotoServiceImpl implements PhotoService {
+
+    /** 缩略图最长边（像素）：地图 48px 标记 @3x DPR + 面板小图足够 */
+    private static final int THUMB_SIZE = 256;
 
     @Resource
     private PhotoMapper photoMapper;
@@ -80,16 +88,17 @@ public class PhotoServiceImpl implements PhotoService {
         // 1. 校验点位存在 + 归属（资源归属校验：不可信任前端传参，KSHG 规范 §14.1）
         SpotDO spot = validateSpotExists(spotId);
 
-        // 2. 上传文件，DB 只存对象 key
+        // 2. 上传原图 + 生成缩略图（DB 只存对象 key）
         String objectKey = buildObjectKey(file, spotId);
         storageClient.upload(file, objectKey);
+        String thumbKey = generateThumbnail(file, objectKey);
 
         // 3. 创建照片记录
         PhotoDO photo = new PhotoDO();
         photo.setSpotId(spotId);
         photo.setUserId(userId);
         photo.setUrl(objectKey);
-        photo.setThumbUrl(objectKey); // 后续可生成缩略图，单独存 key
+        photo.setThumbUrl(thumbKey);
         photo.setLat(spot.getLat());
         photo.setLng(spot.getLng());
         photo.setDescription(description);
@@ -104,8 +113,8 @@ public class PhotoServiceImpl implements PhotoService {
         // 4. 冗余更新点位 photo_count
         updateSpotPhotoCount(spot);
 
-        log.info("[create][id={} spotId={} userId={}] 照片创建 key={}",
-                photo.getId(), spotId, userId, objectKey);
+        log.info("[create][id={} spotId={} userId={}] 照片创建 key={} thumb={}",
+                photo.getId(), spotId, userId, objectKey, thumbKey);
         PhotoRespVO vo = BeanUtils.toBean(photo, PhotoRespVO.class);
         signUrls(vo);
         return vo;
@@ -123,8 +132,11 @@ public class PhotoServiceImpl implements PhotoService {
 
         // 逻辑删除照片
         photoMapper.deleteById(id);
-        // 物理删除存储文件（失败仅告警，不阻断删除流程）
+        // 物理删除存储文件：原图 + 缩略图（失败仅告警，不阻断删除流程）
         storageClient.delete(photo.getUrl());
+        if (photo.getThumbUrl() != null && !photo.getThumbUrl().equals(photo.getUrl())) {
+            storageClient.delete(photo.getThumbUrl());
+        }
 
         // 更新点位 photo_count
         SpotDO spot = spotMapper.selectById(photo.getSpotId());
@@ -136,6 +148,46 @@ public class PhotoServiceImpl implements PhotoService {
             spotMapper.updateById(update);
         }
         log.info("[delete][id={} spotId={}] 照片已删除", id, photo.getSpotId());
+    }
+
+    /**
+     * 生成并上传缩略图；任何失败回退原图 key（不阻断创建，仅告警）。
+     */
+    private String generateThumbnail(MultipartFile file, String objectKey) {
+        String thumbKey = buildThumbKey(objectKey);
+        try {
+            boolean png = isPng(file);
+            java.io.ByteArrayOutputStream thumbOut = new java.io.ByteArrayOutputStream();
+            Thumbnails.of(file.getInputStream())
+                    .size(THUMB_SIZE, THUMB_SIZE)
+                    .outputQuality(png ? 0.8d : 0.7d)
+                    .outputFormat(png ? "png" : "jpg")
+                    .toOutputStream(thumbOut);
+            byte[] thumb = thumbOut.toByteArray();
+            storageClient.uploadBytes(thumb, thumbKey, png ? "image/png" : "image/jpeg");
+            return thumbKey;
+        } catch (Exception e) {
+            // 不支持的格式（webp/gif 动图等）或 IO 异常：回退原图，保证功能可用
+            log.warn("[generateThumbnail][objectKey={}] 缩略图生成失败，回退原图: {}",
+                    objectKey, e.getMessage());
+            return objectKey;
+        }
+    }
+
+    /**
+     * 构造缩略图 key：在原图 key 扩展名前插入 _t（扩展名统一小写）；无扩展名则追加 .jpg。
+     */
+    private String buildThumbKey(String objectKey) {
+        int dot = objectKey.lastIndexOf('.');
+        if (dot > objectKey.lastIndexOf('/')) {
+            return objectKey.substring(0, dot) + "_t" + objectKey.substring(dot).toLowerCase();
+        }
+        return objectKey + "_t.jpg";
+    }
+
+    private boolean isPng(MultipartFile file) {
+        String contentType = file.getContentType();
+        return contentType != null && contentType.contains("png");
     }
 
     /**

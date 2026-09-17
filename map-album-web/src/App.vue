@@ -44,13 +44,14 @@
       @close="lightboxVisible = false"
     />
     <ToastMessage />
+    <UserLogin v-if="needLogin" @logged-in="onLoggedIn" />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, provide, onMounted, onBeforeUnmount } from 'vue'
 import exifr from 'exifr'
-import { uploadPhoto } from './api/index.js'
+import { uploadPhoto, hasToken, setNeedLoginListener } from './api/index.js'
 import { wgs84ToGcj02 } from './utils/coord.js'
 import { hasCapacitor, takePhoto } from './utils/capacitor.js'
 import SearchBar from './components/SearchBar.vue'
@@ -58,6 +59,7 @@ import MapContainer from './components/MapContainer.vue'
 import SpotPanel from './components/SpotPanel.vue'
 import PhotoLightbox from './components/PhotoLightbox.vue'
 import ToastMessage from './components/ToastMessage.vue'
+import UserLogin from './components/UserLogin.vue'
 import { useAmap } from './composables/useAmap.js'
 import { useSpots } from './composables/useSpots.js'
 import { usePhotos } from './composables/usePhotos.js'
@@ -71,6 +73,23 @@ const { map, initMap, getAMap, createGeocoder } = useAmap()
 const spotsStore = useSpots()
 const photosStore = usePhotos()
 const { toastState, showToast } = useToast()
+
+// ===== 登录门（APK 原生端必须登录/注册；网页 H5 测试免登录直通） =====
+const needLogin = ref(hasCapacitor() && !hasToken())
+setNeedLoginListener(() => { needLogin.value = true })
+
+async function onLoggedIn() {
+  needLogin.value = false
+  try {
+    await spotsStore.loadSpots()
+    await photosStore.loadAllPhotos()
+    spotsStore.renderAllMarkers()
+    console.log('[App] 登录后数据加载完成')
+  } catch (e) {
+    console.error('[App] 登录后加载数据失败:', e)
+    showToast('加载数据失败: ' + e.message, 'error')
+  }
+}
 
 // ===== 移动端检测 =====
 const isMobile = ref(false)
@@ -116,7 +135,7 @@ provide('openLightbox', (photos, idx) => {
 async function onMapReady(containerId) {
   try {
     const m = await initMap(containerId)
-    await spotsStore.bind(m, getAMap(), () => photosStore.latestPhotoMap.value)
+    await spotsStore.bind(m, getAMap(), () => photosStore.latestPhotoMap.value, () => photosStore.photosBySpot.value)
 
     // --- 地图点击：创建模式下放置标记 ---
     m.on('click', async (e) => {
@@ -177,6 +196,7 @@ async function onMapReady(containerId) {
       console.log('[App] 数据加载完成，共 ' + spotsStore.spots.value.length + ' 个点位')
     } catch (e) {
       console.error('[App] 加载数据失败:', e)
+      if (e && e.needLogin) return // 原生端未登录：等待登录门，登录后重载
       showToast('加载数据失败: ' + e.message, 'error')
     }
   } catch (e) {

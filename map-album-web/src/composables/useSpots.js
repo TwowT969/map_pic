@@ -1,6 +1,10 @@
 import { ref } from 'vue'
 import { fetchSpots, createSpot as apiCreateSpot, updateSpot as apiUpdateSpot, deleteSpot as apiDeleteSpot } from '../api/index.js'
-import { createMarkerElement } from '../utils/marker.js'
+import { createMarkerElement, createSimpleMarkerElement } from '../utils/marker.js'
+
+// 缩放分级阈值：地图缩放 >= DETAIL_ZOOM 级才渲染照片缩略图标记；
+// 更小时只渲染"📍图标 + 照片数"简化标记（不含 <img>，零图片请求，防止大量加载卡顿）
+const DETAIL_ZOOM = 14
 
 export function useSpots() {
   const spots = ref([])
@@ -11,12 +15,15 @@ export function useSpots() {
   let _map = null
   let _amap = null
   let _latestPhotoMap = () => ({})
+  let _photoCountMap = () => ({})
   let _cluster = null
+  let _lastDetail = null
 
-  async function bind(mapInstance, amapInstance, latestPhotoMapGetter) {
+  async function bind(mapInstance, amapInstance, latestPhotoMapGetter, photoCountMapGetter) {
     _map = mapInstance
     _amap = amapInstance
     _latestPhotoMap = latestPhotoMapGetter
+    _photoCountMap = photoCountMapGetter || (() => ({}))
 
     // 加载点聚合插件
     await new Promise((resolve) => {
@@ -42,6 +49,19 @@ export function useSpots() {
       _map.setZoomAndCenter(Math.min(_map.getZoom() + 3, 18),
         [lngSum / item.clusterData.length, latSum / item.clusterData.length])
     })
+
+    // 缩放跨过详情阈值 → 重渲染标记（切换 简化图标 / 照片缩略图 两种形态）
+    _map.on('zoomend', _onZoomEnd)
+  }
+
+  function _isDetail() {
+    return !!(_map && _map.getZoom() >= DETAIL_ZOOM)
+  }
+
+  function _onZoomEnd() {
+    if (_lastDetail !== null && _isDetail() !== _lastDetail) {
+      _refreshCluster()
+    }
   }
 
   // ===== 自定义聚合点样式 =====
@@ -65,11 +85,21 @@ export function useSpots() {
   function _renderMarker(context) {
     const d = context.data[0] // 原始数据
     const spot = spots.value.find(s => s.id === d.spotId)
-    const latestPhoto = _latestPhotoMap()[d.spotId] || null
-    const content = createMarkerElement(
-      { name: d.name || (spot?.name) },
-      latestPhoto ? { thumbUrl: latestPhoto.thumbUrl || latestPhoto.url } : null
-    )
+    const name = d.name || (spot && spot.name) || '未命名'
+
+    let content
+    if (_isDetail()) {
+      // 近景：照片缩略图标记（thumbUrl 为服务端压缩小图）
+      const latestPhoto = _latestPhotoMap()[d.spotId] || null
+      content = createMarkerElement(
+        { name },
+        latestPhoto ? { thumbUrl: latestPhoto.thumbUrl || latestPhoto.url } : null
+      )
+    } else {
+      // 远景：纯图标 + 照片数，不加载任何图片
+      const count = (_photoCountMap()[d.spotId] || []).length
+      content = createSimpleMarkerElement({ name }, count)
+    }
     context.marker.setContent(content)
     context.marker.setAnchor('bottom-center')
     // 针尖在 wrapper 底部，offset (0,0) 即可精准扎在坐标上
@@ -99,6 +129,7 @@ export function useSpots() {
       weight: photoMap[s.id] ? 2 : 1
     }))
     _cluster.setData(points)
+    _lastDetail = _isDetail()
   }
 
   function renderAllMarkers() {
