@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { fetchSpots, createSpot as apiCreateSpot, updateSpot as apiUpdateSpot, deleteSpot as apiDeleteSpot } from '../api/index.js'
 import { createMarkerElement, createSimpleMarkerElement, createPickMarkerElement } from '../utils/marker.js'
+import { track } from '../utils/applog.js'
 
 // 比例尺阈值（需求3）：比例尺 < 10km 时点位标记展示图片拼贴（最多 3 张、本地加载）；
 // 更粗的比例尺只渲染"📍图标 + 照片数"简化标记（不含 <img>，零图片请求，防止大量加载卡顿）。
@@ -10,6 +11,11 @@ const SCALE_SHOW_M = 10000    // 显示图片：比例尺 < 10km
 const SCALE_HYSTER_M = 11500  // 滞回：已显示时超过该值才切回简化标记
 // 长按触发时长（毫秒）：长按标记后进入拖动，松手保存新位置
 const LONG_PRESS_MS = 450
+// 聚合点点击节流（毫秒）：防止连续点按聚簇在缩放动画期间重复触发导致卡顿
+const CLUSTER_CLICK_THROTTLE_MS = 600
+// 聚合展开前的重渲染防抖（毫秒）：等缩放动画结束后再统一刷新标记形态，
+// 避免在 zoomend 回调里同步 setData 重入聚合组件（Android WebView 卡死根因）
+const REFRESH_DEBOUNCE_MS = 120
 
 export function useSpots() {
   const spots = ref([])
@@ -27,6 +33,9 @@ export function useSpots() {
   let _pickMarker = null
   let _justDragged = false          // 拖动刚结束的短暂时间片内屏蔽 click
   let _lastClick = { id: 0, ts: 0 } // 点击去重（集群 click 与标记 click 可能同时触发）
+  let _lastClusterClick = 0         // 聚合点点击节流
+  let _refreshTimer = null          // 防抖合并的刷新定时器
+  let _draggingNow = false          // 标记长按拖动进行中
 
   async function bind(mapInstance, amapInstance, latestPhotoMapGetter, photoListMapGetter, handlers = {}) {
     _map = mapInstance
@@ -47,25 +56,27 @@ export function useSpots() {
       renderMarker: _renderMarker
     })
 
-    // 聚合点点击 → 多点聚合放大展开；单点兜底触发点位点击
-    // （部分机型/版本点击单个标记只冒泡到集群事件，不处理会导致"点击点位无响应"）
+    // ===== 聚合点（汇聚图标）点击逻辑 =====
+    // - 单点：直接打开该点位详情
+    // - 多点：按成员包围盒展开（setBounds），展开后所有成员可见；
+    //   成员几乎重合或已接近最大缩放、无法再展开时 → 打开簇内最近更新的点位详情
+    // - 600ms 节流：缩放动画期间忽略重复点按
     _cluster.on('click', (item) => {
-      if (item.clusterData.length <= 1) {
-        const sid = item.clusterData[0] && item.clusterData[0].spotId
+      const now = Date.now()
+      if (now - _lastClusterClick < CLUSTER_CLICK_THROTTLE_MS) return
+      _lastClusterClick = now
+
+      const members = item.clusterData || []
+      if (members.length <= 1) {
+        const sid = members[0] && members[0].spotId
         const s = spots.value.find(x => x.id === sid)
         if (s) _dispatchMarkerClick(s)
         return
       }
-      let lngSum = 0, latSum = 0
-      item.clusterData.forEach(d => {
-        lngSum += d.lnglat[0]
-        latSum += d.lnglat[1]
-      })
-      _map.setZoomAndCenter(Math.min(_map.getZoom() + 3, 18),
-        [lngSum / item.clusterData.length, latSum / item.clusterData.length])
+      _expandCluster(members)
     })
 
-    // 缩放跨过比例尺阈值 → 重渲染标记（切换 简化图标 / 图片拼贴 两种形态）
+    // 缩放跨过比例尺阈值 → 延迟合并刷新标记形态（切换 简化图标 / 图片拼贴）
     _map.on('zoomend', _onZoomEnd)
     _photosOn = _computeShow()
   }
@@ -91,12 +102,22 @@ export function useSpots() {
     return _photosOn ? s < SCALE_HYSTER_M : s < SCALE_SHOW_M
   }
 
+  /** 跨阈值后延迟刷新：等缩放动画收尾，合并多次触发，避免同步 setData 卡死 */
   function _onZoomEnd() {
     const should = _computeShow()
     if (should !== _photosOn) {
       _photosOn = should
-      _refreshCluster()
+      _scheduleRefresh()
     }
+  }
+
+  function _scheduleRefresh() {
+    if (_refreshTimer) return // 已有排程，合并
+    _refreshTimer = setTimeout(() => {
+      _refreshTimer = null
+      if (_draggingNow) { _scheduleRefresh(); return } // 拖动中顺延
+      _refreshCluster()
+    }, REFRESH_DEBOUNCE_MS)
   }
 
   /** 标记点击统一入口（去重：同一位置 400ms 内只触发一次，防集群/标记事件双发） */
@@ -105,6 +126,64 @@ export function useSpots() {
     if (spot && spot.id === _lastClick.id && now - _lastClick.ts < 400) return
     _lastClick = { id: spot ? spot.id : 0, ts: now }
     if (spot && _handlers.onMarkerClick) _handlers.onMarkerClick(spot)
+  }
+
+  // ===== 聚合展开 =====
+
+  /**
+   * 展开聚合：按成员包围盒适配视野（外扩 30% 保证不贴边）。
+   * 成员几乎重合（<100m）或已在高倍缩放（>=17 级）时无法再展开，
+   * 直接打开簇内最近更新的点位详情，避免"点了没反应/反复缩放"。
+   */
+  function _expandCluster(members) {
+    try {
+      let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+      members.forEach(d => {
+        const lng = d.lnglat[0]
+        const lat = d.lnglat[1]
+        if (lng < minLng) minLng = lng
+        if (lng > maxLng) maxLng = lng
+        if (lat < minLat) minLat = lat
+        if (lat > maxLat) maxLat = lat
+      })
+      const spanLng = maxLng - minLng
+      const spanLat = maxLat - minLat
+
+      if ((spanLng < 0.001 && spanLat < 0.001) || _map.getZoom() >= 17) {
+        const s = _pickSpotInCluster(members)
+        if (s) {
+          _dispatchMarkerClick(s)
+          track('cluster_open_latest', String(members.length))
+        }
+        return
+      }
+
+      const padLng = Math.max(spanLng * 0.3, 0.0005)
+      const padLat = Math.max(spanLat * 0.3, 0.0004)
+      const bounds = new _amap.Bounds(
+        [minLng - padLng, minLat - padLat],
+        [maxLng + padLng, maxLat + padLat]
+      )
+      _map.setBounds(bounds)
+      track('cluster_expand', String(members.length))
+    } catch (e) {
+      // 兜底：一次性放大 2 级
+      try {
+        const c = members[0].lnglat
+        _map.setZoomAndCenter(Math.min(_map.getZoom() + 2, 18), [c[0], c[1]])
+      } catch (e2) { /* ignore */ }
+    }
+  }
+
+  /** 簇内挑"最近更新"的点位（无时间则取第一个可找到的） */
+  function _pickSpotInCluster(members) {
+    let best = null
+    members.forEach(d => {
+      const s = spots.value.find(x => x.id === d.spotId)
+      if (!s) return
+      if (!best || _timeOf(s) > _timeOf(best)) best = s
+    })
+    return best || spots.value.find(x => x.id === (members[0] && members[0].spotId)) || null
   }
 
   // ===== 自定义聚合点样式 =====
@@ -203,6 +282,7 @@ export function useSpots() {
       pressTimer = setTimeout(() => {
         pressTimer = null
         dragging = true
+        _draggingNow = true
         contentEl.classList.add('marker-dragging')
         try { _map.setStatus({ dragEnable: false }) } catch (err) { /* ignore */ }
         if (_handlers.onDragStart) _handlers.onDragStart(spot)
@@ -234,6 +314,7 @@ export function useSpots() {
       if (pressTimer) { clearTimeout(pressTimer); pressTimer = null }
       if (!dragging) return
       dragging = false
+      _draggingNow = false
       contentEl.classList.remove('marker-dragging')
       try { _map.setStatus({ dragEnable: true }) } catch (err) { /* ignore */ }
       if (moved) {
@@ -256,7 +337,11 @@ export function useSpots() {
 
   // ===== 构建聚合数据并刷新 =====
   function _refreshCluster() {
-    if (!_cluster) return
+    if (!_cluster || !_map) return
+    // 保险：非拖动态下恢复地图拖拽（防止长按拖动异常中断导致地图锁死 = "卡死"观感）
+    if (!_draggingNow) {
+      try { _map.setStatus({ dragEnable: true }) } catch (e) { /* ignore */ }
+    }
     const photoMap = _photoListMap()
     const points = spots.value.map(s => ({
       lnglat: [s.lng, s.lat],
