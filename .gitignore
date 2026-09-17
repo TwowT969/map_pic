@@ -65,3 +65,4 @@ keystore/
 node_modules/
 map-album-web/dist/uploads/
 uploads/
+release/
