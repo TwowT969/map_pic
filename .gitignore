@@ -63,4 +63,5 @@ keystore/
 **/ios/Pods/
 **/ios/build/
 node_modules/
-map-album-web/dist/
+map-album-web/dist/uploads/
+uploads/

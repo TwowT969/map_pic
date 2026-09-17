@@ -17,6 +17,7 @@ public interface ErrorCodeConstants {
     ErrorCode USER_NOT_EXISTS = new ErrorCode(1001, "用户不存在");
     ErrorCode USER_DISABLED = new ErrorCode(1002, "用户已禁用");
     ErrorCode USER_SSO_CONFLICT = new ErrorCode(1003, "SSO 用户标识冲突");
+    ErrorCode USER_NOT_LOGIN = new ErrorCode(1004, "账号未登录");
 
     // ==================== 点位 2xxx ====================
 
@@ -30,4 +31,5 @@ public interface ErrorCodeConstants {
     ErrorCode PHOTO_AUDIT_PENDING = new ErrorCode(3002, "照片审核中，不可操作");
     ErrorCode PHOTO_AUDIT_REJECTED = new ErrorCode(3003, "照片已被驳回");
     ErrorCode PHOTO_UPLOAD_FAIL = new ErrorCode(3004, "照片上传失败");
+    ErrorCode PHOTO_NO_PERMISSION = new ErrorCode(3005, "无权操作该照片");
 }

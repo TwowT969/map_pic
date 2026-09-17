@@ -81,3 +81,10 @@ oss:
   access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
   bucket-name: ${OSS_BUCKET_NAME:}
   signed-url-expire: 3600
+
+# ===== storage (test phase: local disk; switch to oss in production) =====
+app:
+  storage:
+    type: local
+  upload:
+    path: /root/map_pic/uploads

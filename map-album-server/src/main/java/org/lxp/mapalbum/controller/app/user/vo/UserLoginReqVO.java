@@ -10,6 +10,7 @@ import java.io.Serializable;
  *
  * <p>SSO 式登录：传 ssoUserId + ssoProvider 标识唯一用户，首次登录自动注册。
  * nickname / avatarUrl 仅首次注册时写入，已存在用户不覆盖（由 SSO 同步更新）。
+ * 测试阶段 SSO 未接入，前端传 provider=dev + 设备侧固定 ssoUserId 即可完成联调。
  *
  * @author lxp
  */

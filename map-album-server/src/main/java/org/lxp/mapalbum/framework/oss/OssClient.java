@@ -7,6 +7,7 @@ import com.aliyun.oss.OSSException;
 import com.aliyun.oss.model.ObjectMetadata;
 import com.aliyun.oss.model.PutObjectRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -30,6 +31,7 @@ import static org.lxp.mapalbum.framework.common.exception.ServiceExceptionUtil.e
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(name = "app.storage.type", havingValue = "oss")
 public class OssClient {
 
     @Resource

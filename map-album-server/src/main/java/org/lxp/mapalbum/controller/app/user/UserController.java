@@ -1,7 +1,7 @@
 package org.lxp.mapalbum.controller.app.user;
 
 import org.lxp.mapalbum.controller.app.user.vo.UserLoginReqVO;
-import org.lxp.mapalbum.controller.app.user.vo.UserRespVO;
+import org.lxp.mapalbum.controller.app.user.vo.UserLoginRespVO;
 import org.lxp.mapalbum.framework.common.pojo.CommonResult;
 import org.lxp.mapalbum.service.user.UserService;
 import org.springframework.validation.annotation.Validated;
@@ -27,13 +27,14 @@ public class UserController {
     private UserService userService;
 
     /**
-     * SSO 式登录：首次登录自动注册，已存在则返回用户信息。
+     * SSO 式登录：首次登录自动注册，已存在则校验状态；
+     * 成功返回访问令牌 + 用户信息，后续请求携带 Authorization: Bearer <token>。
      *
      * @param reqVO 登录请求
-     * @return 用户信息
+     * @return 令牌 + 用户信息
      */
     @PostMapping("/login")
-    public CommonResult<UserRespVO> login(@Validated @RequestBody UserLoginReqVO reqVO) {
+    public CommonResult<UserLoginRespVO> login(@Validated @RequestBody UserLoginReqVO reqVO) {
         return success(userService.login(reqVO));
     }
 }
