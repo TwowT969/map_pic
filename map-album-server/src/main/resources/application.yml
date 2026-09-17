@@ -92,4 +92,4 @@ app:
     code: 5
     name: "1.2.0"
     url: "http://59.110.53.169/apk/map-album-v1.2.0-debug.apk"
-    notes: "上传可靠性/相册时间轴/我的页/HTTPS/崩溃上报" 
+    notes: 本地化存储：图片只存设备本地，服务器仅存元数据；海报修复
