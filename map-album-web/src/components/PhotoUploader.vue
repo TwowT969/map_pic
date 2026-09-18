@@ -14,7 +14,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, inject } from 'vue'
 import { hasCapacitor, pickFromGallery } from '../utils/capacitor.js'
 
 const emit = defineEmits(['upload'])
@@ -22,9 +22,20 @@ const fileInput = ref(null)
 const dragover = ref(false)
 const picking = ref(false)
 
+const openPicker = inject('openGalleryPicker', null)
+
 function triggerUpload() {
-  // 原生端（APK）：调用系统相册选择器（与首页"从相册选择"一致），
-  // 不再走 <input type="file">（WebView 中会打开文件管理器/文档界面，而非本地相册）
+  // 原生端（APK）：微信式应用内相册（App 级 provide），秒开直读系统相册
+  if (hasCapacitor() && openPicker) {
+    if (picking.value) return
+    picking.value = true
+    openPicker(20)
+      .then(files => { if (files && files.length > 0) emit('upload', files) })
+      .catch(() => { /* 用户取消，静默 */ })
+      .finally(() => { picking.value = false })
+    return
+  }
+  // 兜底：旧链路（系统选择器三级降级）
   if (hasCapacitor()) {
     if (picking.value) return
     picking.value = true

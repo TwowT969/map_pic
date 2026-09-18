@@ -15,6 +15,8 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // 注册本地原生插件：微信式应用内相册（直读 MediaStore，不拉起系统文件管理器）
+        registerPlugin(GalleryPlugin.class);
         super.onCreate(savedInstanceState);
         // WebView 在 BridgeActivity.onCreate 后初始化，配置在 onStart 中完成
     }

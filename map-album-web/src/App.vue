@@ -130,6 +130,14 @@
         @close="popupSpot = null"
       />
 
+      <!-- 微信式应用内相册选择器（APK）：直读系统相册，不拉起文件管理器 -->
+      <GalleryPicker
+        v-if="galleryOpen"
+        :limit="20"
+        @close="onGalleryClose"
+        @confirm="onGalleryConfirm"
+      />
+
       <!-- 点位管理面板 -->
       <SpotPanel
         v-if="panelVisible"
@@ -177,6 +185,7 @@ import {
   hasCapacitor, takePhoto, pickFromGallery, getCurrentPosition,
   requestLocationPermission, compressImage, onNetworkChange
 } from './utils/capacitor.js'
+import { hasGalleryPlugin } from './utils/gallery.js'
 import { addPending, listPending, removePending, countPending } from './utils/pendingQueue.js'
 import { buildBrowseChain } from './utils/browseChain.js'
 import { track, reportError, flush, installGlobalErrorHandlers } from './utils/applog.js'
@@ -184,6 +193,7 @@ import SearchBar from './components/SearchBar.vue'
 import MapContainer from './components/MapContainer.vue'
 import SpotPanel from './components/SpotPanel.vue'
 import PhotoLightbox from './components/PhotoLightbox.vue'
+import GalleryPicker from './components/GalleryPicker.vue'
 import UploadPickPanel from './components/UploadPickPanel.vue'
 import SpotDetailPopup from './components/SpotDetailPopup.vue'
 import ProfileView from './components/ProfileView.vue'
@@ -553,11 +563,46 @@ async function onTakePhoto() {
   }
 }
 
-/** 底部"相册"标签：直接打开手机系统相册批量选照片（不设应用内独立相册） */
+// ===== 微信式应用内相册（APK 直读系统相册，不再打开系统文件管理器） =====
+const galleryOpen = ref(false)
+let _galleryResolve = null
+let _galleryReject = null
+
+function openGalleryPicker(limit = 20) {
+  if (galleryOpen.value) return Promise.reject(new Error('未选择照片'))
+  galleryOpen.value = true
+  track('gallery_open')
+  return new Promise((resolve, reject) => {
+    _galleryResolve = resolve
+    _galleryReject = reject
+  })
+}
+
+function onGalleryClose() {
+  galleryOpen.value = false
+  if (_galleryReject) { _galleryReject(new Error('未选择照片')); _galleryResolve = null; _galleryReject = null }
+}
+
+async function onGalleryConfirm(files) {
+  galleryOpen.value = false
+  const r = _galleryResolve
+  _galleryResolve = null
+  _galleryReject = null
+  if (r) r(files || [])
+}
+
+provide('openGalleryPicker', openGalleryPicker)
+
+/** 底部"相册"标签：APK 打开应用内相册（微信式）；浏览器降级系统选择 */
 async function openAlbumPicker() {
   if (activeView.value !== 'map') switchView('map')
   try {
-    const files = await pickFromGallery(true)
+    let files
+    if (hasGalleryPlugin()) {
+      files = await openGalleryPicker(20)
+    } else {
+      files = await pickFromGallery(true)
+    }
     if (files && files.length) enqueueFiles(files)
   } catch (e) {
     if (e && e.message !== '未选择照片') showToast('打开相册失败: ' + (e?.message || e), 'error')
@@ -1191,6 +1236,7 @@ function goUpdate() {
 // ===== 键盘快捷键 =====
 function onKeyDown(e) {
   if (e.key !== 'Escape') return
+  if (galleryOpen.value) { onGalleryClose(); e.preventDefault(); return }
   if (remarkVisible.value) { remarkVisible.value = false; e.preventDefault(); return }
   if (spotMenuOpen.value) { closeSpotMenu(); e.preventDefault(); return }
   if (updateInfo.value) { updateInfo.value = null; e.preventDefault(); return }
@@ -1208,6 +1254,7 @@ function onKeyDown(e) {
 
 /** 安卓系统返回键/手势：逐层关闭浮层，再切回地图，地图无浮层则退出 */
 function onAndroidBack(CapApp) {
+  if (galleryOpen.value) { onGalleryClose(); return }
   if (remarkVisible.value) { remarkVisible.value = false; return }
   if (spotMenuOpen.value) { closeSpotMenu(); return }
   if (updateInfo.value) { updateInfo.value = null; return }
