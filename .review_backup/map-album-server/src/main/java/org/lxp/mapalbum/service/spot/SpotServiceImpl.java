@@ -10,16 +10,13 @@ import org.lxp.mapalbum.dal.mysql.PhotoMapper;
 import org.lxp.mapalbum.dal.mysql.SpotMapper;
 import org.lxp.mapalbum.enums.SpotStatusEnum;
 import org.lxp.mapalbum.framework.common.util.BeanUtils;
-import org.lxp.mapalbum.framework.common.util.SecurityFrameworkUtils;
 import org.lxp.mapalbum.framework.mybatis.query.LambdaQueryWrapperX;
-import org.lxp.mapalbum.framework.storage.StorageClient;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.util.Collections;
 import java.util.List;
 
-import static org.lxp.mapalbum.enums.ErrorCodeConstants.SPOT_NO_PERMISSION;
 import static org.lxp.mapalbum.enums.ErrorCodeConstants.SPOT_NOT_EXISTS;
 import static org.lxp.mapalbum.framework.common.exception.ServiceExceptionUtil.exception;
 
@@ -37,9 +34,6 @@ public class SpotServiceImpl implements SpotService {
 
     @Resource
     private PhotoMapper photoMapper;
-
-    @Resource
-    private StorageClient storageClient;
 
     @Override
     public SpotRespVO create(SpotCreateReqVO reqVO, Long userId) {
@@ -84,8 +78,6 @@ public class SpotServiceImpl implements SpotService {
             log.warn("[update][id={}] 点位不存在", reqVO.getId());
             throw exception(SPOT_NOT_EXISTS);
         }
-        // 资源归属校验：仅创建者（或系统上下文）可修改，与照片接口语义一致
-        validateOwnership(spot);
         if (reqVO.getName() != null) spot.setName(reqVO.getName());
         if (reqVO.getDescription() != null) spot.setDescription(reqVO.getDescription());
         if (reqVO.getCategory() != null) spot.setCategory(reqVO.getCategory());
@@ -96,7 +88,7 @@ public class SpotServiceImpl implements SpotService {
         if (reqVO.getProvince() != null) spot.setProvince(reqVO.getProvince());
         if (reqVO.getCity() != null) spot.setCity(reqVO.getCity());
         if (reqVO.getDistrict() != null) spot.setDistrict(reqVO.getDistrict());
-        // 注：审核状态(status)不开放客户端直接修改（此前 PUT /spots 可越权改 status，已移除）
+        if (reqVO.getStatus() != null) spot.setStatus(reqVO.getStatus());
 
         spotMapper.updateById(spot);
         log.info("[update][id={} name={}] 点位更新", spot.getId(), spot.getName());
@@ -110,38 +102,15 @@ public class SpotServiceImpl implements SpotService {
             log.warn("[delete][id={}] 点位不存在", id);
             throw exception(SPOT_NOT_EXISTS);
         }
-        // 资源归属校验：仅创建者（或系统上下文）可删除
-        validateOwnership(spot);
-        // 逻辑删除关联照片，并尽力清理历史远程文件（与照片删除语义一致）
+        // 逻辑删除关联照片
         LambdaQueryWrapperX<PhotoDO> photoQuery = new LambdaQueryWrapperX<PhotoDO>()
                 .eqIfPresent(PhotoDO::getSpotId, id);
         List<PhotoDO> photos = photoMapper.selectList(photoQuery);
         for (PhotoDO photo : photos) {
-            if (photo.getUrl() != null) {
-                storageClient.delete(photo.getUrl());
-            }
-            if (photo.getThumbUrl() != null && !photo.getThumbUrl().equals(photo.getUrl())) {
-                storageClient.delete(photo.getThumbUrl());
-            }
             photoMapper.deleteById(photo.getId());
         }
         // 逻辑删除点位
         spotMapper.deleteById(id);
         log.info("[delete][id={} name={}] 点位及 {} 张关联照片已删除", id, spot.getName(), photos.size());
-    }
-
-    /**
-     * 资源归属校验：登录用户仅可操作自己创建的点位（系统上下文 DEFAULT_USER_ID 豁免）。
-     */
-    private void validateOwnership(SpotDO spot) {
-        Long loginUserId = SecurityFrameworkUtils.getLoginUserId();
-        if (SecurityFrameworkUtils.DEFAULT_USER_ID.equals(loginUserId)) {
-            return;
-        }
-        if (!loginUserId.equals(spot.getCreator())) {
-            log.warn("[validateOwnership][spotId={}, creatorId={}, loginUserId={}] 越权操作被拒绝",
-                    spot.getId(), spot.getCreator(), loginUserId);
-            throw exception(SPOT_NO_PERMISSION);
-        }
     }
 }

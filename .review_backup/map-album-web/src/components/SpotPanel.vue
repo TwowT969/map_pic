@@ -102,8 +102,7 @@ onMounted(() => {
   nextTick(() => { show.value = true })
 })
 
-// 面板已挂载时切换点位：跟随 autoEdit（长按→编辑点位 直接进编辑态）
-watch([() => props.spot, () => props.isCreating], () => { editing.value = props.autoEdit })
+watch([() => props.spot, () => props.isCreating], () => { editing.value = false })
 
 // ===== 拖拽关闭（仅移动端底部抽屉） =====
 let dragStartY = 0

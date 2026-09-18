@@ -29,7 +29,6 @@ public interface ErrorCodeConstants {
     ErrorCode SPOT_NOT_EXISTS = new ErrorCode(2001, "点位不存在");
     ErrorCode SPOT_NOT_ONLINE = new ErrorCode(2002, "点位未上线，不可操作");
     ErrorCode SPOT_NAME_DUPLICATE = new ErrorCode(2003, "点位名称重复");
-    ErrorCode SPOT_NO_PERMISSION = new ErrorCode(2004, "无权操作该点位");
 
     // ==================== 照片 3xxx ====================
 

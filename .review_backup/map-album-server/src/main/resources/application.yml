@@ -15,10 +15,9 @@ spring:
     active: local
   # 数据源（MySQL 8）
   datasource:
-    # 生产由 systemd 环境变量注入（SPRING_DATASOURCE_*）；此处仅为本地开发缺省值
-    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/map_album?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
-    username: ${SPRING_DATASOURCE_USERNAME:root}
-    password: ${SPRING_DATASOURCE_PASSWORD:123456}
+    url: jdbc:mysql://localhost:3306/map_album?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456
     driver-class-name: com.mysql.cj.jdbc.Driver
   # Redis
   redis:

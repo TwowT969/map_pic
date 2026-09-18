@@ -10,7 +10,6 @@ import java.math.BigDecimal;
  * 点位更新请求 VO（KSHG 规范 §5.1 ReqVO）。
  *
  * <p>只传需要更新的字段；null 字段不更新。
- * 审核状态 status 不开放客户端修改（防止越权改状态，由审核端控制）。
  *
  * @author lxp
  */
@@ -32,6 +31,7 @@ public class SpotUpdateReqVO implements Serializable {
     private String province;
     private String city;
     private String district;
+    private Integer status;
 
     public SpotUpdateReqVO() {
     }

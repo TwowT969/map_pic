@@ -145,12 +145,13 @@
         @cancel="onUploadCancel"
       />
 
-      <!-- 点位详情弹窗：图片列表（编辑/拖动/备注走长按菜单） -->
+      <!-- 点位详情弹窗：图片列表 + 一一对应备注 + 图片/点位标签 -->
       <SpotDetailPopup
         v-if="popupSpot"
         :spot="popupSpot"
         :photos="popupPhotos"
         @close="popupSpot = null"
+        @manage="onManageSpot"
       />
 
       <!-- 点位管理面板 -->
@@ -967,6 +968,12 @@ async function onSaveRemark() {
   } finally {
     remarkBusy.value = false
   }
+}
+
+function onManageSpot() {
+  const spot = popupSpot.value
+  popupSpot.value = null
+  if (spot) onSpotClick(spot)
 }
 
 // ===== 光箱：备注编辑 / 删除 =====

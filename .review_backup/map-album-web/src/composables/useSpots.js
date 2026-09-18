@@ -265,7 +265,6 @@ export function useSpots() {
     contentEl.__lpMenuAttached = true
 
     let pressTimer = null
-    let startX = 0
     let startY = 0
 
     const cancel = () => {
@@ -277,7 +276,6 @@ export function useSpots() {
       if (isPicking.value) return                    // 选点模式不响应
       // 缩略图上不触发长按菜单（点击缩略图 = 看大图）
       if (e.target && e.target.closest && e.target.closest('.marker-thumb')) return
-      startX = e.clientX
       startY = e.clientY
       pressTimer = setTimeout(() => {
         pressTimer = null
@@ -291,8 +289,8 @@ export function useSpots() {
     }
 
     const onMove = (e) => {
-      // 手指明显移动（横向/纵向任一）→ 是拖动地图，取消长按
-      if (pressTimer && (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10)) cancel()
+      // 手指明显移动 → 是拖动地图，取消长按
+      if (pressTimer && Math.abs(e.clientY - startY) > 10) cancel()
     }
 
     contentEl.addEventListener('pointerdown', onDown)
@@ -334,9 +332,6 @@ export function useSpots() {
   // ===== 构建聚合数据并刷新 =====
   function _refreshCluster() {
     if (!_cluster || !_map) return
-    // 先清空标记索引：renderMarker 会随 setData 重新填充，
-    // 避免已删除点位的旧 marker 残留（泄漏）或复用失效实例
-    _markerBySpot.clear()
     const photoMap = _photoListMap()
     const points = spots.value.map(s => ({
       lnglat: [s.lng, s.lat],

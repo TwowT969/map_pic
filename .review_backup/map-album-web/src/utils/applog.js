@@ -48,18 +48,16 @@ export function reportError(err, tag) {
   scheduleFlush(2000)
 }
 
-/** 批量上报（登录后调用；失败回滚缓冲区）。一次排空整个缓冲（分批 20 条） */
+/** 批量上报（登录后调用；失败回滚缓冲区） */
 export async function flush() {
   clearTimeout(flushTimer)
+  if (buffer.length === 0) return
   if (!hasToken()) return
-  while (buffer.length > 0) {
-    const batch = buffer.splice(0, 20)
-    try {
-      await postApplog(batch)
-    } catch (e) {
-      buffer = batch.concat(buffer).slice(-BUFFER_MAX)
-      break // 失败保留待下次（定时器/下次登录）再试
-    }
+  const batch = buffer.splice(0, 20)
+  try {
+    await postApplog(batch)
+  } catch (e) {
+    buffer = batch.concat(buffer).slice(-BUFFER_MAX)
   }
 }
 

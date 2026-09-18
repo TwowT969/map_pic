@@ -162,12 +162,7 @@ public class UserServiceImpl implements UserService {
         newUser.setPassword(hash(reqVO.getPassword().trim(), reqVO.getSsoUserId()));
         newUser.setGender(0);
         newUser.setStatus(CommonStatusEnum.ENABLED.getCode());
-        try {
-            userMapper.insert(newUser);
-        } catch (org.springframework.dao.DuplicateKeyException e) {
-            // 并发注册同账号撞唯一索引（uk_sso）：转业务错误而不是 500
-            throw exception(USER_ACCOUNT_EXISTS);
-        }
+        userMapper.insert(newUser);
         return newUser;
     }
 

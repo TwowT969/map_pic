@@ -138,11 +138,10 @@ export async function deleteLocalPhoto(photo) {
         await Filesystem.deleteFile({ directory: Directory.External, path })
       } else {
         await idbDelete(path)
-      }
-      // 同步清理显示源缓存（两端通用）
-      if (srcCache.has(path)) {
-        try { URL.revokeObjectURL(srcCache.get(path)) } catch (e) { /* ignore */ }
-        srcCache.delete(path)
+        if (srcCache.has(path)) {
+          try { URL.revokeObjectURL(srcCache.get(path)) } catch (e) { /* ignore */ }
+          srcCache.delete(path)
+        }
       }
     } catch (e) { /* 尽力而为 */ }
   }

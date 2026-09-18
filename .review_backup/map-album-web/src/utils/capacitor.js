@@ -101,8 +101,7 @@ export async function pickFromGallery(multiple = true) {
       if (files.length > 0) return files
       throw new Error('未选择照片')
     } catch (e) {
-      // 用户取消（空结果/取消异常）直接结束，不再弹第二级选择器
-      if (e && (e.message === '未选择照片' || /取消|cancel/i.test(e?.message || ''))) throw e
+      if (e && e.message === '未选择照片') throw e
       console.warn('[capacitor] pickImages 不可用，降级单选:', e?.message || e)
     }
 
@@ -160,7 +159,6 @@ function pickViaFileInput(multiple) {
       }
       resolve(Array.from(fileList))
     }
-    input.oncancel = () => reject(new Error('未选择照片'))
     input.click()
   })
 }
