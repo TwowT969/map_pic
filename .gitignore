@@ -66,3 +66,4 @@ node_modules/
 map-album-web/dist/uploads/
 uploads/
 release/
+.review_backup/
