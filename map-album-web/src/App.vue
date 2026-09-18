@@ -12,7 +12,7 @@
         @select-own-photo="onSearchOwnPhoto"
       />
       <div v-show="activeView === 'map'" class="map-host">
-        <MapContainer @map-ready="onMapReady" @spot-click="onSpotClick" />
+        <MapContainer @map-ready="onMapReady" />
       </div>
 
       <!-- 相册视图（时间轴） -->
@@ -194,7 +194,7 @@ import {
   createPhotoMeta, hasToken, setNeedLoginListener, fetchIpLocation,
   fetchAppVersion, getCurrentNickname
 } from './api/index.js'
-import { saveLocalPhoto } from './utils/photoStore.js'
+import { saveLocalPhoto, deleteLocalPhoto } from './utils/photoStore.js'
 import { wgs84ToGcj02 } from './utils/coord.js'
 import {
   hasCapacitor, takePhoto, pickFromGallery, getCurrentPosition,
@@ -730,6 +730,7 @@ async function onUploadConfirm(description) {
     const loc = await saveLocalPhoto(full, thumb)
     // 3. 远程只登记元数据（本地路径 + 备注 + 拍摄信息）；失败进待同步队列
     let spotForView = null
+    let registered = false
     try {
       if (isOffline.value) throw new Error('当前无网络')
       const spot = await ensureSpotAt({ ...pickCoord.value })
@@ -742,29 +743,37 @@ async function onUploadConfirm(description) {
         localPath: loc.localPath,
         localThumbPath: loc.localThumbPath
       })
-      await photosStore.loadAllPhotos()
-      spotsStore.renderAllMarkers()
+      registered = true
+    } catch (e) {
+      if (!registered) {
+        const saved = await addPending({
+          id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          meta: {
+            ...pickCoord.value,
+            desc: description || '',
+            shotTime: currentMeta.value.shotTime,
+            device: currentMeta.value.device,
+            localPath: loc.localPath,
+            localThumbPath: loc.localThumbPath
+          }
+        })
+        if (saved) {
+          showToast('已存到本地，联网后自动同步记录', 'success')
+          track('upload_pending', e?.message || '')
+        } else {
+          showToast('保存失败: ' + (e?.message || e), 'error')
+          track('upload_fail', e?.message || '')
+        }
+      }
+    }
+    if (registered) {
+      // 登记已成功：此处刷新失败只忽略，绝不能落入待传队列（否则补传会重复登记）
+      try {
+        await photosStore.loadAllPhotos()
+        spotsStore.renderAllMarkers()
+      } catch (e) { /* ignore */ }
       showToast('已保存', 'success')
       track('upload_success')
-    } catch (e) {
-      const saved = await addPending({
-        id: 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-        meta: {
-          ...pickCoord.value,
-          desc: description || '',
-          shotTime: currentMeta.value.shotTime,
-          device: currentMeta.value.device,
-          localPath: loc.localPath,
-          localThumbPath: loc.localThumbPath
-        }
-      })
-      if (saved) {
-        showToast('已存到本地，联网后自动同步记录', 'success')
-        track('upload_pending', e?.message || '')
-      } else {
-        showToast('保存失败: ' + (e?.message || e), 'error')
-        track('upload_fail', e?.message || '')
-      }
     }
     if (uploadQueue.length > 0) {
       await nextUploadFile(true)
@@ -825,6 +834,11 @@ async function resumePending() {
     let ok = 0
     for (const item of items) {
       if (isOffline.value) break
+      if (item.meta && item.meta.registeredAt) {
+        // 上次已登记成功但队列删除失败：不再重复登记，仅清理队列
+        await removePending(item.id)
+        continue
+      }
       try {
         // 旧版本队列的 blob 记录：先补存本地再登记
         let localPath = item.meta && item.meta.localPath
@@ -845,7 +859,13 @@ async function resumePending() {
           localPath,
           localThumbPath
         })
-        await removePending(item.id)
+        const removed = await removePending(item.id)
+        if (!removed) {
+          // 登记成功但队列删除失败：打标防止下次补传重复登记
+          item.meta = item.meta || {}
+          item.meta.registeredAt = Date.now()
+          await addPending(item)
+        }
         ok++
       } catch (e) { /* 保留队列下次再试 */ }
     }
@@ -1083,6 +1103,13 @@ async function onSpotUpdated(spotData) {
 async function onSpotDeleted(id) {
   try {
     await spotsStore.remove(id)
+    // 服务端已级联删除照片：同步清理本地照片状态与设备文件，避免相册"幽灵照片"
+    const orphans = photosStore.allPhotos.value.filter(p => p.spotId === id)
+    photosStore.allPhotos.value = photosStore.allPhotos.value.filter(p => p.spotId !== id)
+    const photoMap = { ...photosStore.photosBySpot.value }
+    delete photoMap[id]
+    photosStore.photosBySpot.value = photoMap
+    for (const p of orphans) { deleteLocalPhoto(p).catch(() => {}) }
     panelVisible.value = false
     currentSpot.value = null
     if (popupSpot.value && popupSpot.value.id === id) popupSpot.value = null
@@ -1161,6 +1188,8 @@ function goUpdate() {
 // ===== 键盘快捷键 =====
 function onKeyDown(e) {
   if (e.key !== 'Escape') return
+  if (remarkVisible.value) { remarkVisible.value = false; e.preventDefault(); return }
+  if (spotMenuOpen.value) { closeSpotMenu(); e.preventDefault(); return }
   if (updateInfo.value) { updateInfo.value = null; e.preventDefault(); return }
   if (sheetOpen.value) { sheetOpen.value = false; e.preventDefault(); return }
   if (popupSpot.value) { popupSpot.value = null; e.preventDefault(); return }
@@ -1176,6 +1205,8 @@ function onKeyDown(e) {
 
 /** 安卓系统返回键/手势：逐层关闭浮层，再切回地图，地图无浮层则退出 */
 function onAndroidBack(CapApp) {
+  if (remarkVisible.value) { remarkVisible.value = false; return }
+  if (spotMenuOpen.value) { closeSpotMenu(); return }
   if (updateInfo.value) { updateInfo.value = null; return }
   if (sheetOpen.value) { sheetOpen.value = false; return }
   if (popupSpot.value) { popupSpot.value = null; return }

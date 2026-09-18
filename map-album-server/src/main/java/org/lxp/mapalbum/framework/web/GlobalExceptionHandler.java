@@ -4,11 +4,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.lxp.mapalbum.framework.common.exception.ServiceException;
 import org.lxp.mapalbum.framework.common.exception.enums.GlobalErrorCodeConstants;
 import org.lxp.mapalbum.framework.common.pojo.CommonResult;
+import org.springframework.http.HttpStatus;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.validation.ConstraintViolation;
@@ -57,6 +60,16 @@ public class GlobalExceptionHandler {
                 .map(ConstraintViolation::getMessage)
                 .collect(Collectors.joining("; "));
         return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), message);
+    }
+
+    /** 请求方法不支持（如 DELETE 到集合路径）：返回 405 语义而不是 500 系统异常 */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    @ResponseStatus(HttpStatus.METHOD_NOT_ALLOWED)
+    public CommonResult<Void> methodNotSupportedHandler(HttpServletRequest req, HttpRequestMethodNotSupportedException ex) {
+        log.warn("[methodNotSupportedHandler][uri={} method={}] {}",
+                req.getRequestURI(), req.getMethod(), ex.getMessage());
+        return CommonResult.error(GlobalErrorCodeConstants.METHOD_NOT_ALLOWED.getCode(),
+                "请求方法不支持: " + req.getMethod());
     }
 
     /** 兜底异常 */

@@ -22,7 +22,8 @@
         @touchmove="onTouchMove"
         @touchend="onTouchEnd"
       >
-        <img :src="currentSrc" alt="大图" :style="imgStyle" @click.stop draggable="false" />
+        <img v-if="!imgBroken" :src="currentSrc" alt="大图" :style="imgStyle" @click.stop draggable="false" @error="imgBroken = true" />
+        <div v-else style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#9aa7b5;font-size:14px;">🖼️ 图片无法显示</div>
       </div>
 
       <!-- 备注编辑条（可编辑模式） -->
@@ -91,6 +92,10 @@ const currentSrc = computed(() => {
   if (typeof photo === 'string') return fileUrl(photo)
   return photo.src || photo.thumbSrc || fileUrl(photo.url || photo.thumbUrl || '')
 })
+
+// 主图加载失败兜底（本地文件丢失且无远程 URL 时避免破图）
+const imgBroken = ref(false)
+watch(currentSrc, () => { imgBroken.value = false })
 
 // 缩略图 URL
 function thumbnailOf(photo) {

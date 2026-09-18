@@ -274,7 +274,7 @@ export function useSpots() {
 
     const onDown = (e) => {
       if (e.button != null && e.button !== 0) return // 仅左键/触摸
-      if (isPicking.value) return                    // 选点模式不响应
+      if (isPicking.value || isCreating.value) return  // 选点/创建模式不响应
       // 缩略图上不触发长按菜单（点击缩略图 = 看大图）
       if (e.target && e.target.closest && e.target.closest('.marker-thumb')) return
       startX = e.clientX
@@ -313,6 +313,7 @@ export function useSpots() {
       m.setDraggable(true)
       const onDragEnd = () => {
         try { m.off('dragend', onDragEnd) } catch (e) { /* ignore */ }
+        if (m.__dragTimeout) { clearTimeout(m.__dragTimeout); m.__dragTimeout = null }
         try { m.setDraggable(false) } catch (e) { /* ignore */ }
         _justDragged = true
         setTimeout(() => { _justDragged = false }, 450)
@@ -325,6 +326,13 @@ export function useSpots() {
         } catch (e) { /* ignore */ }
       }
       m.on('dragend', onDragEnd)
+      // 15s 内未拖动则自动退出可拖动态：避免之后误拖标记静默改位
+      if (m.__dragTimeout) clearTimeout(m.__dragTimeout)
+      m.__dragTimeout = setTimeout(() => {
+        m.__dragTimeout = null
+        try { m.off('dragend', onDragEnd) } catch (e) { /* ignore */ }
+        try { m.setDraggable(false) } catch (e) { /* ignore */ }
+      }, 15000)
       return true
     } catch (e) {
       return false

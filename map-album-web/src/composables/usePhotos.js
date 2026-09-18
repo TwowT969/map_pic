@@ -75,6 +75,7 @@ export function usePhotos() {
     const isObj = spot && typeof spot === 'object'
     const spotId = isObj ? spot.id : spot
     const results = []
+    let firstErr = null
     for (const file of files) {
       if (!file || !file.type || !file.type.startsWith('image/')) continue
       const full = await compressImage(file, 2048, 0.85)
@@ -107,12 +108,15 @@ export function usePhotos() {
             localThumbPath: loc.localThumbPath
           }
         })
-        throw new Error('照片已存本地，网络恢复后自动同步记录')
+        // 单张登记失败：进待传队列并继续处理同批其余照片（此前直接 throw 会丢剩余照片）
+        if (!firstErr) firstErr = new Error('部分照片已存本地，联网后自动同步记录')
+        continue
       }
     }
     if (results.length > 0) {
       await loadPhotos(spotId)
     }
+    if (firstErr) throw firstErr
     return results
   }
 

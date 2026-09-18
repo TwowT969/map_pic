@@ -5,9 +5,12 @@
 import { hasCapacitor } from '../utils/capacitor.js'
 
 const FALLBACK_BASE = import.meta.env.VITE_API_BASE || '/api'
-const HTTPS_BASE = 'https://59.110.53.169/api'
+// APK 端 HTTPS 直连基址（构建时可用 VITE_HTTPS_API_BASE 覆盖；探测成功时优先于 FALLBACK_BASE）
+const HTTPS_BASE = import.meta.env.VITE_HTTPS_API_BASE || 'https://59.110.53.169/api'
 const BASE_CACHE_KEY = 'map_album_api_base'
 const BASE_CACHE_TTL = 24 * 60 * 60 * 1000
+// 探测失败（负结果）只缓存 1 小时：避免瞬时故障让 App 在明文通道滞留一整天
+const BASE_NEG_TTL = 60 * 60 * 1000
 
 let API_BASE = FALLBACK_BASE
 let probePromise = null
@@ -15,13 +18,13 @@ let probePromise = null
 function readCachedBase() {
   try {
     const v = JSON.parse(localStorage.getItem(BASE_CACHE_KEY) || 'null')
-    if (v && v.base && Date.now() - v.ts < BASE_CACHE_TTL) return v.base
+    if (v && v.base && Date.now() - v.ts < (v.ttl || BASE_CACHE_TTL)) return v.base
   } catch (e) { /* ignore */ }
   return null
 }
 
-function cacheBase(base) {
-  try { localStorage.setItem(BASE_CACHE_KEY, JSON.stringify({ base, ts: Date.now() })) } catch (e) { /* ignore */ }
+function cacheBase(base, ttl) {
+  try { localStorage.setItem(BASE_CACHE_KEY, JSON.stringify({ base, ts: Date.now(), ttl: ttl || BASE_CACHE_TTL })) } catch (e) { /* ignore */ }
 }
 
 /** 确定 API 基地址（APK 端异步探测 HTTPS，优先加密通道） */
@@ -40,7 +43,7 @@ export function resolveApiBase() {
       } catch (e) {
         API_BASE = FALLBACK_BASE
       }
-      cacheBase(API_BASE)
+      cacheBase(API_BASE, API_BASE === HTTPS_BASE ? BASE_CACHE_TTL : BASE_NEG_TTL)
       console.log('[api] API_BASE =', API_BASE)
       return API_BASE
     })()

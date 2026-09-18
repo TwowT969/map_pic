@@ -16,6 +16,7 @@ public interface GlobalErrorCodeConstants {
     ErrorCode UNAUTHORIZED = new ErrorCode(401, "账号未登录");
     ErrorCode FORBIDDEN = new ErrorCode(403, "没有该操作权限");
     ErrorCode NOT_FOUND = new ErrorCode(404, "请求资源不存在");
+    ErrorCode METHOD_NOT_ALLOWED = new ErrorCode(405, "请求方法不支持");
     ErrorCode INTERNAL_SERVER_ERROR = new ErrorCode(500, "系统异常");
     ErrorCode NOT_IMPLEMENTED = new ErrorCode(501, "功能尚未实现");
 }

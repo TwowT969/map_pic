@@ -29,14 +29,21 @@ function blobToFile(blob, name) {
 export async function takePhoto() {
   if (hasCapacitor()) {
     const { Camera, CameraSource } = await import('@capacitor/camera')
-    const photo = await Camera.getPhoto({
-      quality: 90,
-      allowEditing: false,
-      source: CameraSource.Camera,
-      resultType: 'base64',
-      // 拍摄的原图同时保存到系统相册（本地化存储：相册即留存入口）
-      saveToGallery: true
-    })
+    let photo
+    try {
+      photo = await Camera.getPhoto({
+        quality: 90,
+        allowEditing: false,
+        source: CameraSource.Camera,
+        resultType: 'base64',
+        // 拍摄的原图同时保存到系统相册（本地化存储：相册即留存入口）
+        saveToGallery: true
+      })
+    } catch (e) {
+      // 原生取消文案归一化（"User cancelled" 等），上层据此静默处理而非报错
+      if (/取消|cancel/i.test((e && e.message) || String(e || ''))) throw new Error('取消拍照')
+      throw e
+    }
     const base64 = photo.base64String
     const mime = `image/${photo.format || 'jpeg'}`
     const byteChars = atob(base64)
