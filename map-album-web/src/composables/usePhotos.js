@@ -10,6 +10,7 @@ import {
   updatePhotoDescription as apiUpdateDesc, fileUrl
 } from '../api/index.js'
 import { compressImage } from '../utils/capacitor.js'
+import { fileFromPath } from '../utils/gallery.js'
 import { saveLocalPhoto, deleteLocalPhoto, photoLocalSrc } from '../utils/photoStore.js'
 import { addPending } from '../utils/pendingQueue.js'
 
@@ -76,7 +77,9 @@ export function usePhotos() {
     const spotId = isObj ? spot.id : spot
     const results = []
     let firstErr = null
-    for (const file of files) {
+    for (const entry of files) {
+      // 支持路径引用（系统 Photo Picker 返回值）：此刻才物化为 File，逐张加载
+      const file = typeof entry === 'string' ? await fileFromPath(entry) : entry
       if (!file || !file.type || !file.type.startsWith('image/')) continue
       const full = await compressImage(file, 2048, 0.85)
       const thumb = await compressImage(file, 256, 0.72)

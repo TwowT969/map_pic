@@ -130,13 +130,6 @@
         @close="popupSpot = null"
       />
 
-      <!-- 微信式应用内相册选择器（APK）：直读系统相册，不拉起文件管理器 -->
-      <GalleryPicker
-        v-if="galleryOpen"
-        @close="onGalleryClose"
-        @confirm="onGalleryConfirm"
-      />
-
       <!-- 点位管理面板 -->
       <SpotPanel
         v-if="panelVisible"
@@ -184,7 +177,7 @@ import {
   hasCapacitor, takePhoto, pickFromGallery, getCurrentPosition,
   requestLocationPermission, compressImage, onNetworkChange
 } from './utils/capacitor.js'
-import { hasGalleryPlugin } from './utils/gallery.js'
+import { pickPhotos, fileFromPath } from './utils/gallery.js'
 import { addPending, listPending, removePending, countPending } from './utils/pendingQueue.js'
 import { buildBrowseChain } from './utils/browseChain.js'
 import { track, reportError, flush, installGlobalErrorHandlers } from './utils/applog.js'
@@ -192,7 +185,6 @@ import SearchBar from './components/SearchBar.vue'
 import MapContainer from './components/MapContainer.vue'
 import SpotPanel from './components/SpotPanel.vue'
 import PhotoLightbox from './components/PhotoLightbox.vue'
-import GalleryPicker from './components/GalleryPicker.vue'
 import UploadPickPanel from './components/UploadPickPanel.vue'
 import SpotDetailPopup from './components/SpotDetailPopup.vue'
 import ProfileView from './components/ProfileView.vue'
@@ -562,47 +554,17 @@ async function onTakePhoto() {
   }
 }
 
-// ===== 微信式应用内相册（APK 直读系统相册，不再打开系统文件管理器） =====
-const galleryOpen = ref(false)
-let _galleryResolve = null
-let _galleryReject = null
-
-function openGalleryPicker() {
-  if (galleryOpen.value) return Promise.reject(new Error('未选择照片'))
-  galleryOpen.value = true
-  track('gallery_open')
-  return new Promise((resolve, reject) => {
-    _galleryResolve = resolve
-    _galleryReject = reject
-  })
-}
-
-function onGalleryClose() {
-  galleryOpen.value = false
-  if (_galleryReject) { _galleryReject(new Error('未选择照片')); _galleryResolve = null; _galleryReject = null }
-}
-
-async function onGalleryConfirm(files) {
-  galleryOpen.value = false
-  const r = _galleryResolve
-  _galleryResolve = null
-  _galleryReject = null
-  if (r) r(files || [])
-}
-
-provide('openGalleryPicker', openGalleryPicker)
-
-/** 底部"相册"标签：APK 打开应用内相册（微信式）；浏览器降级系统选择 */
+// ===== 相册入口：系统 Photo Picker（系统进程渲染网格/管理内存，App 零列表加载） =====
+/** 底部"相册"标签：唤起系统相册 Picker；按产品决策不做旧机型/H5 兜底 */
 async function openAlbumPicker() {
   if (activeView.value !== 'map') switchView('map')
   try {
-    let files
-    if (hasGalleryPlugin()) {
-      files = await openGalleryPicker()
-    } else {
-      files = await pickFromGallery(true)
+    if (hasCapacitor()) {
+      const paths = await pickPhotos()
+      if (paths && paths.length) enqueueRefs(paths)
+      return
     }
-    if (files && files.length) enqueueFiles(files)
+    showToast('相册选择请在 App 中使用')
   } catch (e) {
     if (e && e.message !== '未选择照片') showToast('打开相册失败: ' + (e?.message || e), 'error')
   }
@@ -624,6 +586,13 @@ function enqueueFiles(files) {
   nextUploadFile(false)
 }
 
+/** 相册路径引用入队：上传循环内逐张物化为 File，内存峰值恒为单张 */
+function enqueueRefs(paths) {
+  uploadQueue.push(...paths)
+  if (pickVisible.value && currentFile.value) return
+  nextUploadFile(false)
+}
+
 function fmtDateTime(d) {
   if (!d) return ''
   const t = new Date(d)
@@ -638,8 +607,10 @@ function fmtDateTime(d) {
  * @param {boolean} useCurrentPos true=沿用当前位置（批量连传）
  */
 async function nextUploadFile(useCurrentPos) {
-  const file = uploadQueue.shift()
-  if (!file) { finishPick(); return }
+  const entry = uploadQueue.shift()
+  if (!entry) { finishPick(); return }
+  // 路径引用在此刻才物化为 File（单张），处理完随下一张自然释放
+  const file = typeof entry === 'string' ? await fileFromPath(entry) : entry
   currentFile.value = file
   releasePreview()
   previewUrl.value = URL.createObjectURL(file)
@@ -1235,7 +1206,6 @@ function goUpdate() {
 // ===== 键盘快捷键 =====
 function onKeyDown(e) {
   if (e.key !== 'Escape') return
-  if (galleryOpen.value) { onGalleryClose(); e.preventDefault(); return }
   if (remarkVisible.value) { remarkVisible.value = false; e.preventDefault(); return }
   if (spotMenuOpen.value) { closeSpotMenu(); e.preventDefault(); return }
   if (updateInfo.value) { updateInfo.value = null; e.preventDefault(); return }
@@ -1253,7 +1223,6 @@ function onKeyDown(e) {
 
 /** 安卓系统返回键/手势：逐层关闭浮层，再切回地图，地图无浮层则退出 */
 function onAndroidBack(CapApp) {
-  if (galleryOpen.value) { onGalleryClose(); return }
   if (remarkVisible.value) { remarkVisible.value = false; return }
   if (spotMenuOpen.value) { closeSpotMenu(); return }
   if (updateInfo.value) { updateInfo.value = null; return }

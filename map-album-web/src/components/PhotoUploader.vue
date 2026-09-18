@@ -14,35 +14,25 @@
 </template>
 
 <script setup>
-import { ref, inject } from 'vue'
-import { hasCapacitor, pickFromGallery } from '../utils/capacitor.js'
+import { ref } from 'vue'
+import { hasCapacitor } from '../utils/capacitor.js'
+import { pickPhotos } from '../utils/gallery.js'
 
 const emit = defineEmits(['upload'])
 const fileInput = ref(null)
 const dragover = ref(false)
 const picking = ref(false)
 
-const openPicker = inject('openGalleryPicker', null)
-
-function triggerUpload() {
-  // 原生端（APK）：微信式应用内相册（App 级 provide），秒开直读系统相册
-  if (hasCapacitor() && openPicker) {
-    if (picking.value) return
-    picking.value = true
-    openPicker()
-      .then(files => { if (files && files.length > 0) emit('upload', files) })
-      .catch(() => { /* 用户取消，静默 */ })
-      .finally(() => { picking.value = false })
-    return
-  }
-  // 兜底：旧链路（系统选择器三级降级）
+async function triggerUpload() {
+  // 原生端（APK）：系统 Photo Picker（秒开、零权限、系统进程渲染与管理内存）
   if (hasCapacitor()) {
     if (picking.value) return
     picking.value = true
-    pickFromGallery(true)
-      .then(files => { if (files && files.length > 0) emit('upload', files) })
-      .catch(() => { /* 未选择照片 / 用户取消，静默 */ })
-      .finally(() => { picking.value = false })
+    try {
+      const paths = await pickPhotos()
+      if (paths && paths.length > 0) emit('upload', paths)
+    } catch (e) { /* 用户取消，静默 */ }
+    finally { picking.value = false }
     return
   }
   // Web：文件选择（手机浏览器 accept=image/* 会拉起相册/图库）

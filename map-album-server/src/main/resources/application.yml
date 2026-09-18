@@ -90,7 +90,7 @@ app:
   upload:
     path: /root/map_pic/uploads
   version:
-    code: 13
-    name: "1.3.7"
-    url: "http://59.110.53.169/apk/map-album-v1.3.7-debug.apk"
-    notes: v1.3.7：相册秒开（原生缩略图缓存+权限并行）+ 取消选择数量上限 + 界面更干净
+    code: 14
+    name: "1.3.8"
+    url: "http://59.110.53.169/apk/map-album-v1.3.8-debug.apk"
+    notes: v1.3.8：相册改用系统 Photo Picker——系统进程渲染网格、零权限、App 不加载列表，选中后逐张流式加载
