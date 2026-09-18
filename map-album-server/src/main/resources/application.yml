@@ -90,7 +90,7 @@ app:
   upload:
     path: /root/map_pic/uploads
   version:
-    code: 9
-    name: "1.3.3"
-    url: "http://59.110.53.169/apk/map-album-v1.3.3-debug.apk"
-    notes: v1.3.3：点击点位直接展示图片列表；长按点位弹出编辑/拖动/备注菜单；修复"从相册选择"点击无响应（三级降级保证总能打开相册）
+    code: 10
+    name: "1.3.4"
+    url: "http://59.110.53.169/apk/map-album-v1.3.4-debug.apk"
+    notes: v1.3.4：点击聚合点位展示聚合点位的完整图片列表；修复返回键层级顺序（先关大图再关点位）；相册入口改为底部"相册"标签直进手机系统相册

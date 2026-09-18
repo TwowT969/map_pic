@@ -15,8 +15,6 @@
         <MapContainer @map-ready="onMapReady" />
       </div>
 
-      <!-- 相册视图（时间轴） -->
-      <AlbumView v-if="activeView === 'album'" />
       <!-- 我的视图 -->
       <ProfileView
         v-if="activeView === 'profile'"
@@ -30,7 +28,7 @@
           <span class="tab-icon">🗺️</span>
           <span class="tab-label">地图</span>
         </button>
-        <button class="tab-item" :class="{ active: activeView === 'album' }" @click="switchView('album')">
+        <button class="tab-item" @click="openAlbumPicker">
           <span class="tab-icon">🖼️</span>
           <span class="tab-label">相册</span>
           <span class="tab-badge" v-if="totalPhotos">{{ totalPhotos > 99 ? '99+' : totalPhotos }}</span>
@@ -56,29 +54,8 @@
         <b>{{ resuming ? '上传中…' : '立即上传' }}</b>
       </div>
 
-      <!-- 底部中间蓝色加号：上传入口 -->
-      <button class="upload-fab" v-if="activeView === 'map'" @click.stop="openSheet" aria-label="添加照片">＋</button>
-
-
-      <!-- 上传方式选择：拍照 / 从相册选择 -->
-      <Transition name="fade">
-        <div v-if="sheetOpen" class="sheet-mask" @click="sheetOpen = false"></div>
-      </Transition>
-      <div class="action-sheet" :class="{ open: sheetOpen }">
-        <div class="sheet-head">
-          <b>添加照片</b>
-          <span>选择照片后会落到地图当前位置，可拖动蓝色标记校准</span>
-        </div>
-        <button class="sheet-item" @click="onTakePhoto">
-          <span class="sheet-emoji">📷</span>
-          <span class="sheet-text"><b>拍照</b><small>拍摄新照片，自动记录位置与拍摄时间</small></span>
-        </button>
-        <button class="sheet-item" @click="onPickGallery">
-          <span class="sheet-emoji">🖼️</span>
-          <span class="sheet-text"><b>从相册选择</b><small>批量选择已有照片（一次最多 20 张）</small></span>
-        </button>
-        <button class="sheet-item cancel" @click="sheetOpen = false">取消</button>
-      </div>
+      <!-- 底部中间蓝色加号：直接拍照上传（相册选择走底部"相册"标签） -->
+      <button class="upload-fab" v-if="activeView === 'map'" @click.stop="onTakePhoto" aria-label="拍照上传">＋</button>
 
       <!-- 长按点位操作菜单：编辑 / 拖动 / 备注 -->
       <Transition name="fade">
@@ -209,14 +186,13 @@ import SpotPanel from './components/SpotPanel.vue'
 import PhotoLightbox from './components/PhotoLightbox.vue'
 import UploadPickPanel from './components/UploadPickPanel.vue'
 import SpotDetailPopup from './components/SpotDetailPopup.vue'
-import AlbumView from './components/AlbumView.vue'
 import ProfileView from './components/ProfileView.vue'
 import PrivacyConsent from './components/PrivacyConsent.vue'
 import ToastMessage from './components/ToastMessage.vue'
 import UserLogin from './components/UserLogin.vue'
 import { useAmap } from './composables/useAmap.js'
 import { useSpots } from './composables/useSpots.js'
-import { usePhotos } from './composables/usePhotos.js'
+import { usePhotos, photoTimeOf } from './composables/usePhotos.js'
 import { useToast } from './composables/useToast.js'
 import { injectMarkerStyles } from './utils/marker.js'
 
@@ -295,10 +271,19 @@ const lightboxVisible = ref(false)
 const lightboxPhotos = ref([])
 const lightboxIndex = ref(0)
 
-// ===== 点位详情弹窗状态 =====
+// ===== 点位详情弹窗状态（combinedSpotIds = 紧邻聚合合并视图） =====
 const popupSpot = ref(null)
 const popupPhotos = computed(() => {
   if (!popupSpot.value) return []
+  if (popupSpot.value.combinedSpotIds) {
+    const out = []
+    popupSpot.value.combinedSpotIds.forEach(sid => {
+      ;(photosStore.photosBySpot.value[sid] || []).forEach(p => {
+        if (!out.some(x => x.id === p.id)) out.push(p)
+      })
+    })
+    return out.sort((a, b) => photoTimeOf(b) - photoTimeOf(a))
+  }
   return photosStore.photosBySpot.value[popupSpot.value.id] || []
 })
 
@@ -407,7 +392,8 @@ async function onMapReady(containerId) {
         onMarkerPhotoClick,
         onMarkerLongPress,
         onMarkerMoved,
-        onPickMove
+        onPickMove,
+        onClusterCombine
       }
     )
 
@@ -551,21 +537,14 @@ function onSearchOwnPhoto(photo) {
   lightboxVisible.value = true
 }
 
-// ===== 上传入口：底部中间蓝色加号 → 拍照 / 从相册选择 =====
+// ===== 上传入口：蓝色加号=直接拍照；底部"相册"标签=进入手机系统相册选照片 =====
 const HINT_KEY = 'map_album_upload_hint_v1'
-const sheetOpen = ref(false)
-
-function openSheet() {
-  sheetOpen.value = true
-  if (!localStorage.getItem(HINT_KEY)) {
-    localStorage.setItem(HINT_KEY, '1')
-    setTimeout(() => showToast('添加后可拖动地图上的蓝色标记校准位置'), 400)
-  }
-}
-
 
 async function onTakePhoto() {
-  sheetOpen.value = false
+  if (!localStorage.getItem(HINT_KEY)) {
+    localStorage.setItem(HINT_KEY, '1')
+    setTimeout(() => showToast('照片将落到当前位置，可拖动蓝色标记校准'), 400)
+  }
   try {
     const file = await takePhoto()
     if (file) enqueueFiles([file])
@@ -574,13 +553,14 @@ async function onTakePhoto() {
   }
 }
 
-async function onPickGallery() {
-  sheetOpen.value = false
+/** 底部"相册"标签：直接打开手机系统相册批量选照片（不设应用内独立相册） */
+async function openAlbumPicker() {
+  if (activeView.value !== 'map') switchView('map')
   try {
     const files = await pickFromGallery(true)
     if (files && files.length) enqueueFiles(files)
   } catch (e) {
-    if (e && e.message !== '未选择照片') showToast('选择照片失败: ' + (e?.message || e), 'error')
+    if (e && e.message !== '未选择照片') showToast('打开相册失败: ' + (e?.message || e), 'error')
   }
 }
 
@@ -881,6 +861,29 @@ async function resumePending() {
     resuming.value = false
     await refreshPendingCount()
   }
+}
+
+/**
+ * 紧邻聚合点位（成员几乎重合、无法再展开）→ 合并展示簇内全部点位的照片列表。
+ * 不再只打开"最近更新的一个点位"，避免"点了聚合只见一张图"。
+ */
+function onClusterCombine(memberSpots) {
+  if (spotsStore.isPicking.value || spotsStore.isCreating.value) return
+  const list = (memberSpots || []).filter(Boolean)
+  if (list.length === 0) return
+  if (list.length === 1) { onMarkerClick(list[0]); return }
+  const sum = list.reduce(
+    (acc, s) => ({ lng: acc.lng + Number(s.lng || 0), lat: acc.lat + Number(s.lat || 0) }),
+    { lng: 0, lat: 0 }
+  )
+  popupSpot.value = {
+    id: -1, // 哨兵 id：不与真实点位冲突
+    name: list.length + ' 个聚合点位',
+    combinedSpotIds: list.map(s => s.id),
+    lng: sum.lng / list.length,
+    lat: sum.lat / list.length
+  }
+  track('popup_combine', String(list.length))
 }
 
 // ===== 点位详情弹窗 =====
@@ -1191,9 +1194,9 @@ function onKeyDown(e) {
   if (remarkVisible.value) { remarkVisible.value = false; e.preventDefault(); return }
   if (spotMenuOpen.value) { closeSpotMenu(); e.preventDefault(); return }
   if (updateInfo.value) { updateInfo.value = null; e.preventDefault(); return }
-  if (sheetOpen.value) { sheetOpen.value = false; e.preventDefault(); return }
-  if (popupSpot.value) { popupSpot.value = null; e.preventDefault(); return }
+  // 注意顺序=视觉层级：光箱(z300) 在 点位详情弹窗(z240) 之上，必须先关光箱
   if (lightboxVisible.value) { lightboxVisible.value = false; e.preventDefault(); return }
+  if (popupSpot.value) { popupSpot.value = null; e.preventDefault(); return }
   if (pickVisible.value) { finishPick(); showToast('已取消上传'); e.preventDefault(); return }
   if (panelVisible.value) { closePanel(); e.preventDefault(); return }
   if (spotsStore.isCreating.value) {
@@ -1208,9 +1211,9 @@ function onAndroidBack(CapApp) {
   if (remarkVisible.value) { remarkVisible.value = false; return }
   if (spotMenuOpen.value) { closeSpotMenu(); return }
   if (updateInfo.value) { updateInfo.value = null; return }
-  if (sheetOpen.value) { sheetOpen.value = false; return }
-  if (popupSpot.value) { popupSpot.value = null; return }
+  // 注意顺序=视觉层级：光箱(z300) 在 点位详情弹窗(z240) 之上，必须先关光箱
   if (lightboxVisible.value) { lightboxVisible.value = false; return }
+  if (popupSpot.value) { popupSpot.value = null; return }
   if (pickVisible.value) { finishPick(); showToast('已取消上传'); return }
   if (panelVisible.value) { closePanel(); return }
   if (spotsStore.isCreating.value) { spotsStore.cancelCreateMode(); showToast('已退出创建模式'); return }

@@ -69,13 +69,22 @@ export async function takePhoto() {
   })
 }
 
+/** 给插件调用加超时闸门：部分机型权限/选择器 promise 永不落定，导致整条降级链卡死 */
+function withDeadline(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(label + '超时')), ms))
+  ])
+}
+
 /**
  * 从相册选择照片（原生端支持一次多选，最多 20 张）。
- * 三级降级，保证"点击必有响应"：
- *   1) Camera.pickImages —— Android 13+ 系统照片选择器 / Android 12- 系统相册（ACTION_PICK）
- *   2) Camera.getPhoto(Photos) —— 单选系统相册兜底
+ * 三级降级 + 超时闸门，保证"点击必有响应"：
+ *   0) requestPermissions —— 4s 超时（权限弹窗异常时不再卡死后续降级）
+ *   1) Camera.pickImages —— Android 13+ 系统照片选择器 / Android 12- 系统相册（ACTION_PICK），45s 超时
+ *   2) Camera.getPhoto(Photos) —— 单选系统相册兜底，45s 超时
  *   3) <input type="file" accept="image/*"> —— WebView 文件选择（系统选择器含相册入口）
- * 每一步失败都带上错误信息上抛（调用方 toast 提示），不再静默无响应。
+ * 1/2 的超时远长于正常挑选照片所需时间，不会打断正常使用；只在插件彻底无响应时触发降级。
  */
 export async function pickFromGallery(multiple = true) {
   if (hasCapacitor()) {
@@ -84,16 +93,19 @@ export async function pickFromGallery(multiple = true) {
     // 被拒也继续尝试：ACTION_PICK / 文件选择器不需要该权限也能选图。
     let permDenied = false
     try {
-      const perm = await Camera.requestPermissions({ permissions: ['photos'] })
+      const perm = await withDeadline(
+        Camera.requestPermissions({ permissions: ['photos'] }),
+        4000, '权限请求'
+      )
       permDenied = !!(perm && perm.photos === 'denied')
     } catch (e) { /* ignore */ }
 
     // 1) 多选系统相册
     try {
-      const result = await Camera.pickImages({
-        quality: 90,
-        limit: multiple ? 20 : 1
-      })
+      const result = await withDeadline(
+        Camera.pickImages({ quality: 90, limit: multiple ? 20 : 1 }),
+        45000, '相册选择'
+      )
       const files = []
       for (let i = 0; i < (result.photos || []).length; i++) {
         const p = result.photos[i]
@@ -115,12 +127,15 @@ export async function pickFromGallery(multiple = true) {
 
     // 2) 单选系统相册兜底
     try {
-      const photo = await Camera.getPhoto({
-        quality: 90,
-        allowEditing: false,
-        source: CameraSource.Photos,
-        resultType: 'base64'
-      })
+      const photo = await withDeadline(
+        Camera.getPhoto({
+          quality: 90,
+          allowEditing: false,
+          source: CameraSource.Photos,
+          resultType: 'base64'
+        }),
+        45000, '相册选择'
+      )
       if (photo && photo.base64String) {
         return [base64ToFile(photo, `photo_${Date.now()}.${photo.format || 'jpg'}`)]
       }

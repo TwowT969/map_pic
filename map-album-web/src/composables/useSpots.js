@@ -59,7 +59,7 @@ export function useSpots() {
     // ===== 聚合点（汇聚图标）点击逻辑 =====
     // - 单点：直接打开该点位详情
     // - 多点：按成员包围盒展开（setBounds），展开后所有成员可见；
-    //   成员几乎重合或已接近最大缩放、无法再展开时 → 打开簇内最近更新的点位详情
+    //   成员几乎重合或已接近最大缩放、无法再展开时 → 合并展示簇内全部点位的照片列表
     // - 600ms 节流：缩放动画期间忽略重复点按
     _cluster.on('click', (item) => {
       const now = Date.now()
@@ -150,11 +150,7 @@ export function useSpots() {
       const spanLat = maxLat - minLat
 
       if ((spanLng < 0.001 && spanLat < 0.001) || _map.getZoom() >= 17) {
-        const s = _pickSpotInCluster(members)
-        if (s) {
-          _dispatchMarkerClick(s)
-          track('cluster_open_latest', String(members.length))
-        }
+        _openClusterPhotos(members)
         return
       }
 
@@ -172,6 +168,30 @@ export function useSpots() {
         const c = members[0].lnglat
         _map.setZoomAndCenter(Math.min(_map.getZoom() + 2, 18), [c[0], c[1]])
       } catch (e2) { /* ignore */ }
+    }
+  }
+
+  /**
+   * 无法展开的紧邻聚合 → 合并展示簇内所有点位的照片列表。
+   * 簇内只有 1 个可解析点位时退回单点位详情。
+   */
+  function _openClusterPhotos(members) {
+    const memberSpots = []
+    ;(members || []).forEach(d => {
+      const s = spots.value.find(x => x.id === d.spotId)
+      if (s && !memberSpots.some(x => x.id === s.id)) memberSpots.push(s)
+    })
+    if (!memberSpots.length) return
+    if (memberSpots.length === 1) {
+      _dispatchMarkerClick(memberSpots[0])
+      return
+    }
+    if (_handlers.onClusterCombine) {
+      _handlers.onClusterCombine(memberSpots)
+      track('cluster_open_combined', String(memberSpots.length))
+    } else {
+      const s = _pickSpotInCluster(members)
+      if (s) _dispatchMarkerClick(s)
     }
   }
 
