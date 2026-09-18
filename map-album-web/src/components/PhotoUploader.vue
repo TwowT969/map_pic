@@ -29,7 +29,7 @@ function triggerUpload() {
   if (hasCapacitor() && openPicker) {
     if (picking.value) return
     picking.value = true
-    openPicker(20)
+    openPicker()
       .then(files => { if (files && files.length > 0) emit('upload', files) })
       .catch(() => { /* 用户取消，静默 */ })
       .finally(() => { picking.value = false })

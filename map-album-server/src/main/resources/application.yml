@@ -90,7 +90,7 @@ app:
   upload:
     path: /root/map_pic/uploads
   version:
-    code: 12
-    name: "1.3.6"
-    url: "http://59.110.53.169/apk/map-album-v1.3.6-debug.apk"
-    notes: v1.3.6：相册选择升级为微信式应用内相册——直读系统相册秒开，多选最多20张，不再打开文件管理器
+    code: 13
+    name: "1.3.7"
+    url: "http://59.110.53.169/apk/map-album-v1.3.7-debug.apk"
+    notes: v1.3.7：相册秒开（原生缩略图缓存+权限并行）+ 取消选择数量上限 + 界面更干净

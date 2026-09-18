@@ -133,7 +133,6 @@
       <!-- 微信式应用内相册选择器（APK）：直读系统相册，不拉起文件管理器 -->
       <GalleryPicker
         v-if="galleryOpen"
-        :limit="20"
         @close="onGalleryClose"
         @confirm="onGalleryConfirm"
       />
@@ -568,7 +567,7 @@ const galleryOpen = ref(false)
 let _galleryResolve = null
 let _galleryReject = null
 
-function openGalleryPicker(limit = 20) {
+function openGalleryPicker() {
   if (galleryOpen.value) return Promise.reject(new Error('未选择照片'))
   galleryOpen.value = true
   track('gallery_open')
@@ -599,7 +598,7 @@ async function openAlbumPicker() {
   try {
     let files
     if (hasGalleryPlugin()) {
-      files = await openGalleryPicker(20)
+      files = await openGalleryPicker()
     } else {
       files = await pickFromGallery(true)
     }
